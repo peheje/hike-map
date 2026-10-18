@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Hike Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root {
+    --bar-bg: rgba(255,255,255,0.92);
+    --bar-fg: #1c1c1e;
+    --muted: #6e6e73;
+    --btn-bg: #f2f2f7;
+    --btn-active: #e5e5ea;
+    --accent: #0a84ff;
+    --border: rgba(0,0,0,0.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bar-bg: rgba(28,28,30,0.92);
+      --bar-fg: #f2f2f7;
+      --muted: #98989f;
+      --btn-bg: #2c2c2e;
+      --btn-active: #3a3a3c;
+      --border: rgba(255,255,255,0.12);
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
+    background: var(--bar-bg); color: var(--bar-fg);
+    -webkit-tap-highlight-color: transparent;
+  }
+  #map { flex: 1; min-height: 0; }
+
+  /* Bottom toolbar: thumb-reachable, below the map so it never overlaps zoom or attribution */
+  #bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px max(12px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    background: var(--bar-bg); border-top: 1px solid var(--border);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  }
+  #status { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 44px; padding: 0 16px; border: 0; border-radius: 12px;
+    font: 600 15px system-ui, -apple-system, sans-serif;
+    background: var(--btn-bg); color: var(--bar-fg); cursor: pointer; user-select: none;
+  }
+  .btn:active { background: var(--btn-active); }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn:disabled { opacity: 0.5; }
+  #fileInput { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+  .leaflet-touch .leaflet-bar a { width: 40px; height: 40px; line-height: 40px; }
+  .leaflet-popup-content { font-size: 15px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="bar">
+  <span id="status">No hikes loaded</span>
+  <label class="btn" for="fileInput">Add</label>
+  <input type="file" id="fileInput" accept=".gpx,application/gpx+xml" multiple>
+  <button class="btn primary" id="loadAllBtn">Load all</button>
+  <button class="btn" id="clearBtn">Clear</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map', { zoomControl: false }).setView([56.0, 10.0], 7);
+L.control.zoom({ position: 'topright' }).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+}).addTo(map);
+
+const NORMAL = { weight: 4, opacity: 0.85 };
+const SELECTED = { weight: 8, opacity: 1 };
+const hikes = new Map(); // key (file name) -> {name, date, km, layer, hitbox}
+let selectedHike = null;
+let colorIndex = 0;
+
+const statusEl = document.getElementById('status');
+const loadAllBtn = document.getElementById('loadAllBtn');
+
+// Golden-angle hues keep neighbouring hikes visually distinct
+function nextColor() {
+  const hue = (colorIndex++ * 137.508) % 360;
+  return `hsl(${hue.toFixed(0)}, 75%, 45%)`;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function haversineMeters(a, b) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b[0] - a[0]), dLon = toRad(b[1] - a[1]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function segmentsLength(segments) {
+  let d = 0;
+  for (const seg of segments)
+    for (let i = 1; i < seg.length; i++) d += haversineMeters(seg[i - 1], seg[i]);
+  return d;
+}
+
+function readPoints(parent, tag) {
+  return [...parent.getElementsByTagName(tag)]
+    .map(el => [parseFloat(el.getAttribute('lat')), parseFloat(el.getAttribute('lon'))])
+    .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
+}
+
+// Each <trkseg> becomes its own line so pauses don't draw straight jumps
+function parseGpx(text, fallbackName) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  let segments = [...doc.getElementsByTagName('trkseg')].map(seg => readPoints(seg, 'trkpt'));
+  segments = segments.filter(s => s.length > 1);
+  if (!segments.length) {
+    const route = readPoints(doc, 'rtept');
+    if (route.length > 1) segments = [route];
+  }
+
+  const metaName = doc.querySelector('metadata > name, gpx > name');
+  const name = metaName?.textContent.trim() || fallbackName;
+
+  let date = doc.querySelector('metadata > time, gpx > time')?.textContent.trim().slice(0, 10) || '';
+  if (!date) date = fallbackName.match(/(\d{4}-\d{2}-\d{2})/)?.[1] || '';
+
+  return { segments, name, date };
+}
+
+function updateStatus(extra = '') {
+  let km = 0;
+  for (const h of hikes.values()) km += h.km;
+  const base = hikes.size
+    ? `${hikes.size} hike${hikes.size === 1 ? '' : 's'} · ${Math.round(km).toLocaleString()} km`
+    : 'No hikes loaded';
+  statusEl.textContent = extra ? `${base} · ${extra}` : base;
+}
+
+function selectHike(hike) {
+  if (selectedHike) selectedHike.layer.setStyle(NORMAL);
+  selectedHike = hike;
+  if (hike) {
+    hike.layer.setStyle(SELECTED);
+    hike.layer.bringToFront();
+  } else {
+    map.closePopup();
+  }
+}
+
+// Returns the new hike, or null if this file is already on the map or has no track
+function addHike(key, text) {
+  if (hikes.has(key)) return null;
+  const { segments, name, date } = parseGpx(text, key.replace(/\.gpx$/i, ''));
+  if (!segments.length) return null;
+
+  const km = segmentsLength(segments) / 1000;
+  // Wide invisible line underneath makes tracks easy to tap on a phone
+  const hitbox = L.polyline(segments, { color: '#000', weight: 22, opacity: 0 }).addTo(map);
+  const layer = L.polyline(segments, { color: nextColor(), ...NORMAL, interactive: false }).addTo(map);
+  const hike = { name, date, km, layer, hitbox };
+
+  hitbox.bindPopup(
+    `<b>${escapeHtml(name)}</b><br>` +
+    (date ? `📅 ${escapeHtml(date)}<br>` : '') +
+    `📏 ${km.toFixed(1)} km`
+  );
+  hitbox.on('click', e => {
+    L.DomEvent.stopPropagation(e);
+    selectHike(hike);
+  });
+
+  hikes.set(key, hike);
+  return hike;
+}
+
+function fitTo(list) {
+  if (!list.length) return;
+  const bounds = L.featureGroup(list.map(h => h.hitbox)).getBounds();
+  map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+}
+
+document.getElementById('fileInput').addEventListener('change', async e => {
+  const added = [];
+  const failed = [];
+  for (const file of e.target.files) {
+    const hike = addHike(file.name, await file.text());
+    if (hike) added.push(hike);
+    else if (!hikes.has(file.name)) failed.push(file.name);
+  }
+  e.target.value = '';
+  fitTo(added);
+  updateStatus();
+  if (failed.length) alert(`No track points found in:\n${failed.join('\n')}`);
+});
+
+// Fetch with a small concurrency limit so phones don't choke on ~100 files
+async function mapLimit(items, limit, fn) {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) await fn(items[next++]);
+  });
+  await Promise.all(workers);
+}
+
+loadAllBtn.onclick = async () => {
+  loadAllBtn.disabled = true;
+  try {
+    const res = await fetch('gpx/index.json', { cache: 'no-cache' });
+    if (!res.ok) throw new Error('gpx/index.json not found — run the sync-gpx skill first');
+    const files = (await res.json()).filter(f => !hikes.has(f));
+    let done = 0, failed = 0;
+    await mapLimit(files, 6, async f => {
+      try {
+        const r = await fetch('gpx/' + encodeURIComponent(f));
+        if (!r.ok) throw new Error(r.status);
+        if (!addHike(f, await r.text())) failed++;
+      } catch { failed++; }
+      updateStatus(`loading ${++done}/${files.length}`);
+    });
+    updateStatus(failed ? `${failed} failed` : '');
+    fitTo([...hikes.values()]);
+  } catch (err) {
+    updateStatus();
+    alert('Could not load hikes: ' + err.message);
+  } finally {
+    loadAllBtn.disabled = false;
+  }
+};
+
+document.getElementById('clearBtn').onclick = () => {
+  selectHike(null);
+  for (const h of hikes.values()) { map.removeLayer(h.layer); map.removeLayer(h.hitbox); }
+  hikes.clear();
+  colorIndex = 0;
+  updateStatus();
+};
+
+map.on('click', () => selectHike(null));
+</script>
+</body>
+</html>

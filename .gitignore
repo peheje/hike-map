@@ -1,0 +1,4 @@
+# Hike data lives on Google Drive, never in git
+gpx/
+*.gpx
+__pycache__/
