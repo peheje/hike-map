@@ -8,7 +8,7 @@ Tap a track to see its name, date and length.
 The GPX files live only on Google Drive. They contain home locations and timestamps, so
 they are **never committed**: `gpx/` is git-ignored.
 
-To fetch them, open this repo in Claude Code (with the Google Drive connector enabled)
+To fetch them, open this repo in Claude Code (with the Google Drive connector enabled, started from the repo root so `.claude/settings.json` applies)
 and say **"sync my hikes"**. That runs the [`sync-gpx` skill](.claude/skills/sync-gpx/SKILL.md),
 which downloads new tracks into `gpx/`, writes `gpx/index.json`, and starts the server.
 No keys or tokens are stored here.
