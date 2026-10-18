@@ -59,11 +59,31 @@
   #fileInput { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 
   .leaflet-touch .leaflet-bar a { width: 40px; height: 40px; line-height: 40px; }
-  .leaflet-popup-content { font-size: 15px; line-height: 1.5; }
+
+  /* Info card for the selected hike: sits between map and toolbar, never over the trail */
+  #info {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px max(12px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
+    background: var(--bar-bg); border-top: 1px solid var(--border);
+  }
+  #info[hidden] { display: none; }
+  #infoSwatch { width: 6px; align-self: stretch; border-radius: 3px; flex: none; }
+  #infoText { flex: 1; min-width: 0; }
+  #infoTitle { font-weight: 600; font-size: 16px; line-height: 1.3; overflow-wrap: anywhere; }
+  #infoMeta { font-size: 14px; color: var(--muted); margin-top: 2px; }
+  #infoClose { flex: none; width: 36px; min-height: 36px; padding: 0; font-size: 20px; border-radius: 18px; }
 </style>
 </head>
 <body>
 <div id="map"></div>
+<div id="info" hidden>
+  <span id="infoSwatch"></span>
+  <div id="infoText">
+    <div id="infoTitle"></div>
+    <div id="infoMeta"></div>
+  </div>
+  <button class="btn" id="infoClose" aria-label="Close">×</button>
+</div>
 <div id="bar">
   <span id="status">No hikes loaded</span>
   <label class="btn" for="fileInput">Add</label>
@@ -94,10 +114,6 @@ const loadAllBtn = document.getElementById('loadAllBtn');
 function nextColor() {
   const hue = (colorIndex++ * 137.508) % 360;
   return `hsl(${hue.toFixed(0)}, 75%, 45%)`;
-}
-
-function escapeHtml(s) {
-  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
 function haversineMeters(a, b) {
@@ -148,16 +164,44 @@ function updateStatus(extra = '') {
   statusEl.textContent = extra ? `${base} · ${extra}` : base;
 }
 
+// "2026-09-28_Aarhus_Noerreris-Skov_Hattemagerskov_6km_422927013.gpx"
+//   -> "Aarhus · Noerreris Skov · Hattemagerskov" (date, km and AllTrails id shown separately)
+function nameFromFile(key) {
+  const label = key
+    .replace(/\.gpx$/i, '')
+    .replace(/^\d{4}-\d{2}-\d{2}[_-]?/, '')
+    .replace(/_\d{6,}$/, '')
+    .replace(/_\d+km(_\d+days)?$/, '');
+  return label.split('_').filter(Boolean).map(p => p.replace(/-/g, ' ')).join(' · ');
+}
+
+const infoEl = document.getElementById('info');
+
+function showInfo(hike) {
+  if (!hike) { infoEl.hidden = true; map.invalidateSize(); return; }
+  document.getElementById('infoSwatch').style.background = hike.color;
+  document.getElementById('infoTitle').textContent = hike.name;
+  const days = hike.key.match(/_(\d+)days/)?.[1];
+  document.getElementById('infoMeta').textContent =
+    [hike.date, `${hike.km.toFixed(1)} km`, days && `${days} days`].filter(Boolean).join(' · ');
+  infoEl.hidden = false;
+  map.invalidateSize();
+  // Only move the map if the selected trail isn't fully visible
+  const bounds = hike.hitbox.getBounds();
+  if (!map.getBounds().contains(bounds)) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+}
+
 function selectHike(hike) {
   if (selectedHike) selectedHike.layer.setStyle(NORMAL);
   selectedHike = hike;
   if (hike) {
     hike.layer.setStyle(SELECTED);
     hike.layer.bringToFront();
-  } else {
-    map.closePopup();
   }
+  showInfo(hike);
 }
+
+document.getElementById('infoClose').onclick = () => selectHike(null);
 
 // Returns the new hike, or null if this file is already on the map or has no track
 function addHike(key, text) {
@@ -166,16 +210,15 @@ function addHike(key, text) {
   if (!segments.length) return null;
 
   const km = segmentsLength(segments) / 1000;
+  const color = nextColor();
   // Wide invisible line underneath makes tracks easy to tap on a phone
   const hitbox = L.polyline(segments, { color: '#000', weight: 22, opacity: 0 }).addTo(map);
-  const layer = L.polyline(segments, { color: nextColor(), ...NORMAL, interactive: false }).addTo(map);
-  const hike = { name, date, km, layer, hitbox };
+  const layer = L.polyline(segments, { color, ...NORMAL, interactive: false }).addTo(map);
+  // Prefer the descriptive file name; fall back to the GPX's own name for unrenamed uploads
+  const fileName = nameFromFile(key);
+  const generic = /^[^·]* · Vandring$|^Vandring$/i.test(fileName);
+  const hike = { key, name: fileName && !generic ? fileName : name, date, km, color, layer, hitbox };
 
-  hitbox.bindPopup(
-    `<b>${escapeHtml(name)}</b><br>` +
-    (date ? `📅 ${escapeHtml(date)}<br>` : '') +
-    `📏 ${km.toFixed(1)} km`
-  );
   hitbox.on('click', e => {
     L.DomEvent.stopPropagation(e);
     selectHike(hike);
