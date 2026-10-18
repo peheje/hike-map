@@ -185,6 +185,11 @@ function addHike(key, text) {
   return hike;
 }
 
+// Most recent hikes by date (ISO dates sort as text); undated hikes count as oldest
+function latestHikes(n) {
+  return [...hikes.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, n);
+}
+
 function fitTo(list) {
   if (!list.length) return;
   const bounds = L.featureGroup(list.map(h => h.hitbox)).getBounds();
@@ -230,7 +235,7 @@ loadAllBtn.onclick = async () => {
       updateStatus(`loading ${++done}/${files.length}`);
     });
     updateStatus(failed ? `${failed} failed` : '');
-    fitTo([...hikes.values()]);
+    fitTo(latestHikes(3));
   } catch (err) {
     updateStatus();
     alert('Could not load hikes: ' + err.message);
