@@ -208,7 +208,13 @@ function near(grid, p, skip){ // returns array of track idx near p (3x3 cells)
 }
 
 /* ---------- GPX parsing ---------- */
-function cleanTitle(t){ return t.replace(/\.gpx$/i,'').replace(/^\d{4}-\d{2}-\d{2}_/,'').replace(/_\d{6,}$/,'').replace(/_/g,' ').trim(); }
+// The file names in Drive are the curated names, e.g.
+// "2026-09-18_Skanderborg_Toerring_9km_419768001.gpx" -> "Skanderborg · Toerring".
+// The <name> inside the GPX is AllTrails' generic one ("Skanderborg Vandring"), so it is only a fallback.
+function nameFromFile(t){
+  return (t || '').replace(/\.gpx$/i,'').replace(/^\d{4}-\d{2}-\d{2}[_-]?/,'').replace(/_\d{6,}$/,'').replace(/_\d+km(_\d+days)?$/i,'')
+    .split('_').filter(Boolean).map(x => x.replace(/-/g,' ').trim()).filter(Boolean).join(' · ');
+}
 function parseGpx(text, meta){
   const doc = new DOMParser().parseFromString(text, 'application/xml');
   if (doc.querySelector('parsererror')) throw new Error('Filen er ikke gyldig GPX');
@@ -234,8 +240,9 @@ function parseGpx(text, meta){
   const fileDate = (meta.title || '').match(/^(\d{4}-\d{2}-\d{2})/);
   const date = fileDate ? fileDate[1] : (t0 ? t0.slice(0,10) : '');
   let s=90,w=180,nn=-90,e=-180; for (const p of pts){ s=Math.min(s,p[0]); nn=Math.max(nn,p[0]); w=Math.min(w,p[1]); e=Math.max(e,p[1]); }
-  return { id: meta.id, title: meta.title || '', modified: meta.modifiedTime || '', viewUrl: meta.viewUrl || '',
-    name: (nameEl && nameEl.textContent.trim()) || cleanTitle(meta.title || 'Uden navn'), date, start: t0 || null,
+  const gpxName = (nameEl && nameEl.textContent.trim()) || '';
+  return { name: nameFromFile(meta.title) || gpxName || 'Uden navn', id: meta.id, title: meta.title || '', modified: meta.modifiedTime || '', viewUrl: meta.viewUrl || '',
+    gpxName, date, start: t0 || null,
     km: km/1000, gain: Math.round(gain), dur: dur && dur > 0 ? Math.round(dur) : null, bbox: [[s,w],[nn,e]], pts };
 }
 
@@ -546,7 +553,7 @@ new MutationObserver(retheme).observe(document.documentElement, { attributes: tr
 (async () => {
   const cached = await idb.all();
   const n = cached ? cached.length : 0;
-  if (n){ S.tracks = cached; refresh(true); }
+  if (n){ for (const t of cached){ t.gpxName ??= t.name; t.name = nameFromFile(t.title) || t.gpxName || 'Uden navn'; } S.tracks = cached; refresh(true); }
   S.token = loadToken(); renderLogin(); renderCompare();
   if (S.token){ if (n) setStatus(`${n} ture fra sidste besøg · tjekker Drive…`); sync(); }
   else if (!CLIENT_ID) setStatus(driveMsg({ code: 'no_client' }), true);
