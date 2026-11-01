@@ -172,7 +172,23 @@ function readTokens(){ C = { land: tok('--land'), trail: tok('--trail'), sel: to
 readTokens();
 
 /* ---------- map ---------- */
-const map = L.map('map', { preferCanvas: true, minZoom: 3, maxZoom: 19 });
+const map = L.map('map', { preferCanvas: true, minZoom: 3, maxZoom: 19, scrollWheelZoom: false });
+// One wheel notch = one zoom step. Leaflet's own wheel zoom sums the pixel delta, and with
+// smooth scrolling one notch arrives as several events, which gave 2-3 steps per notch.
+(() => {
+  let acc = 0, lockUntil = 0, last = 0;
+  map.getContainer().addEventListener('wheel', e => {
+    e.preventDefault();
+    const now = performance.now();
+    if (now - last > 200) acc = 0;
+    last = now;
+    if (now < lockUntil) return;
+    acc += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1);
+    if (Math.abs(acc) < 40) return;   // trackpads send many small deltas; wait for a real gesture
+    map.setZoomAround(map.mouseEventToContainerPoint(e), map.getZoom() + (acc < 0 ? 1 : -1));
+    acc = 0; lockUntil = now + 220;
+  }, { passive: false });
+})();
 const renderer = L.canvas({ tolerance: 6, padding: 0.3 });
 map.fitBounds(DK);
 map.attributionControl.setPrefix(false);
