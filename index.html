@@ -85,6 +85,7 @@ h2{font:600 13px/1 var(--body);letter-spacing:.09em;text-transform:uppercase;col
 .row{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:baseline;padding:8px 6px;border-radius:6px;cursor:pointer;border-bottom:1px solid var(--rule)}
 .row:hover{background:var(--chip)}
 .row.sel{background:var(--chip);box-shadow:inset 3px 0 0 var(--sel)}
+.row .sw{display:block;width:22px;height:4px;border-radius:2px;margin-top:5px}
 .row .d{font:600 14px/1.2 var(--display);color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
 .row .n{min-width:0;font-size:14px;line-height:1.3;overflow-wrap:anywhere}
 .row .n em{display:block;font-style:normal;font-size:12px;color:var(--muted)}
@@ -173,20 +174,29 @@ readTokens();
 
 /* ---------- map ---------- */
 const map = L.map('map', { preferCanvas: true, minZoom: 3, maxZoom: 19, scrollWheelZoom: false });
-// One wheel notch = one zoom step. Leaflet's own wheel zoom sums the pixel delta, and with
-// smooth scrolling one notch arrives as several events, which gave 2-3 steps per notch.
+// One wheel notch = one zoom step. Leaflet's wheel zoom rounds every partial batch of a
+// smooth-scroll burst up to a whole level, so one notch could give 2-3 steps.
+// A single big event (a mouse notch) is one step; streams of small deltas (smooth scrolling,
+// trackpads) count one step per ~90 px. Steps that arrive mid-animation are queued, not lost.
 (() => {
-  let acc = 0, lockUntil = 0, last = 0;
+  let acc = 0, last = 0, pending = null, pendPt = null;
+  const target = () => pending ?? (map._animatingZoom ? map._animateToZoom : map.getZoom());
+  function step(dir, pt){
+    const z = Math.max(map.getMinZoom(), Math.min(map.getMaxZoom(), target() + dir));
+    if (z === target()) return;
+    if (map._animatingZoom){ pending = z; pendPt = pt; return; }
+    map.setZoomAround(pt, z);
+  }
+  map.on('zoomend', () => { if (pending == null) return; const z = pending; pending = null; if (z !== map.getZoom()) map.setZoomAround(pendPt, z); });
   map.getContainer().addEventListener('wheel', e => {
     e.preventDefault();
-    const now = performance.now();
-    if (now - last > 200) acc = 0;
+    const now = performance.now(), pt = map.mouseEventToContainerPoint(e);
+    if (now - last > 150) acc = 0;
     last = now;
-    if (now < lockUntil) return;
-    acc += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1);
-    if (Math.abs(acc) < 40) return;   // trackpads send many small deltas; wait for a real gesture
-    map.setZoomAround(map.mouseEventToContainerPoint(e), map.getZoom() + (acc < 0 ? 1 : -1));
-    acc = 0; lockUntil = now + 220;
+    const d = e.deltaMode === 0 ? e.deltaY : e.deltaY * 100;   // lines/pages: treat as a notch
+    if (Math.abs(d) >= 50){ acc = 0; step(d < 0 ? 1 : -1, pt); return; }
+    acc += d;
+    while (Math.abs(acc) >= 90){ step(acc < 0 ? 1 : -1, pt); acc -= Math.sign(acc) * 90; }
   }, { passive: false });
 })();
 const renderer = L.canvas({ tolerance: 6, padding: 0.3 });
@@ -204,6 +214,12 @@ function zoomClass(){
   $('scale').innerHTML = `${s >= 1000 ? nf0.format(s/1000) + ' km' : s + ' m'}<i style="width:${px.toFixed(0)}px"></i>`;
 }
 map.on('zoomend moveend', zoomClass); zoomClass();
+let lastColorKey = '';
+map.on('moveend', () => {
+  if (!S.tracks.length) return;
+  const cols = overlapColors(), key = [...cols].map(([k, v]) => k + v).join('|');
+  if (key !== lastColorKey){ lastColorKey = key; redrawTrails(); }
+});
 
 /* ---------- geometry helpers ---------- */
 const R = 6371008.8, rad = Math.PI / 180;
@@ -287,20 +303,54 @@ function rebuild(){
 
 /* ---------- rendering ---------- */
 function visible(t){ return !S.hiddenYears.has(t.date.slice(0,4)); }
+// Colours for hikes that overlap each other in the current view, only when zoomed in.
+// Okabe-Ito colours: chosen to stay distinct for red-green colour vision deficiency.
+const PALETTE = ['#0072B2', '#D55E00', '#009E73', '#CC79A7', '#1b1b1b', '#E69F00'];
+const COLOR_ZOOM = 13;
+function overlapColors(){
+  const out = new Map();
+  if (S.cand || map.getZoom() < COLOR_ZOOM) return out;
+  const vb = map.getBounds().pad(0.1);
+  const vis = [];
+  S.tracks.forEach((t, i) => { if (visible(t) && vb.intersects(t.bbox)) vis.push(i); });
+  const visSet = new Set(vis), adj = new Map();
+  const link = (a, b) => { (adj.get(a) || adj.set(a, new Set()).get(a)).add(b); };
+  for (const i of vis){
+    const cnt = new Map();
+    for (const p of S.tracks[i].pts){
+      if (!vb.contains(p)) continue;
+      const n = near(S.grid, p, i);
+      if (n) for (const j of n) if (visSet.has(j)) cnt.set(j, (cnt.get(j) || 0) + 1);
+    }
+    for (const [j, c] of cnt) if (c >= 4){ link(i, j); link(j, i); }   // ~30 m or more side by side
+  }
+  // Greedy colouring in date order, so a hike keeps its colour while you pan around
+  for (const i of [...adj.keys()].sort((a, b) => a - b)){
+    const used = new Set([...adj.get(i)].map(j => out.get(S.tracks[j].id)));
+    out.set(S.tracks[i].id, PALETTE.find(c => !used.has(c)) || PALETTE[i % PALETTE.length]);
+  }
+  return out;
+}
+S.colors = new Map();
 function redrawTrails(){
   trailsLayer.clearLayers(); S.lines.clear();
+  S.colors = overlapColors();
   for (const t of S.tracks){
     if (!visible(t)) continue;
     const isSel = S.selected === t.id;
-    const pl = L.polyline(t.pts, { renderer, color: isSel ? C.sel : C.trail, weight: isSel ? 4.5 : 2.4, opacity: isSel ? 1 : (S.cand ? 0.35 : 0.7), lineJoin: 'round' });
+    const col = S.colors.get(t.id) || (isSel ? C.sel : C.trail), own = S.colors.has(t.id);
+    const base = { weight: own ? 3.5 : 2.4, opacity: S.cand ? 0.35 : own ? 0.95 : 0.7 };
+    if (isSel) L.polyline(t.pts, { renderer, color: '#fff', weight: 9, opacity: 0.9, lineJoin: 'round', interactive: false }).addTo(trailsLayer);
+    const pl = L.polyline(t.pts, { renderer, color: col, weight: isSel ? 5 : base.weight, opacity: isSel ? 1 : base.opacity, lineJoin: 'round' });
     pl.bindTooltip(`${t.name} · ${fmtDate(t.date)}`, { sticky: true, direction: 'top', offset: [0,-6] });
     pl.on('click', () => select(t.id, false));
-    pl.on('mouseover', () => { if (S.selected !== t.id) pl.setStyle({ color: C.sel, opacity: 1 }); });
-    pl.on('mouseout', () => { if (S.selected !== t.id) pl.setStyle({ color: C.trail, opacity: S.cand ? 0.35 : 0.7 }); });
+    pl.on('mouseover', () => { if (S.selected !== t.id){ pl.setStyle(own ? { weight: 5.5, opacity: 1 } : { color: C.sel, opacity: 1 }); pl.bringToFront(); } });
+    pl.on('mouseout', () => { if (S.selected !== t.id) pl.setStyle({ color: col, ...base }); });
     pl.addTo(trailsLayer); S.lines.set(t.id, pl);
   }
   const s = S.lines.get(S.selected); if (s) s.bringToFront();
   drawCand();
+  renderSwatches();
 }
 function drawCand(){
   candLayer.clearLayers();
@@ -334,7 +384,7 @@ function renderList(){
     for (const t of ts){
       const [, m, d] = t.date.split('-');
       const pct = t.km ? Math.round(100 * t.newKm / t.km) : 0;
-      h += `<div class="row${S.selected===t.id?' sel':''}" tabindex="0" role="button" data-id="${t.id}"><div class="d">${+d}. ${MONTHS[+m-1]}</div><div class="n">${esc(t.name)}<em>${pct}% nyt terræn${t.gain ? ` · +${t.gain} m` : ''}</em></div><div class="k">${nf1.format(t.km)} km</div></div>`;
+      h += `<div class="row${S.selected===t.id?' sel':''}" tabindex="0" role="button" data-id="${t.id}"><div class="d">${+d}. ${MONTHS[+m-1]}<i class="sw" style="background:${S.colors.get(t.id) || 'transparent'}"></i></div><div class="n">${esc(t.name)}<em>${pct}% nyt terræn${t.gain ? ` · +${t.gain} m` : ''}</em></div><div class="k">${nf1.format(t.km)} km</div></div>`;
     }
   }
   $('list').innerHTML = h || '<p class="empty">Ingen ture i de valgte år.</p>';
@@ -342,6 +392,9 @@ function renderList(){
 $('list').addEventListener('click', e => { const r = e.target.closest('.row'); if (r) select(r.dataset.id, true); });
 $('list').addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('row')){ e.preventDefault(); select(e.target.dataset.id, true); } });
 
+function renderSwatches(){
+  document.querySelectorAll('.row').forEach(r => { const sw = r.querySelector('.sw'); if (sw) sw.style.background = S.colors.get(r.dataset.id) || 'transparent'; });
+}
 function select(id, fly){
   S.selected = S.selected === id && !fly ? null : id;
   const t = S.byId.get(S.selected);
