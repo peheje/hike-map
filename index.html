@@ -1,301 +1,558 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="da">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<title>Hike Map</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Vandrekort</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
 <style>
-  :root {
-    --bar-bg: rgba(255,255,255,0.92);
-    --bar-fg: #1c1c1e;
-    --muted: #6e6e73;
-    --btn-bg: #f2f2f7;
-    --btn-active: #e5e5ea;
-    --accent: #0a84ff;
-    --border: rgba(0,0,0,0.12);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bar-bg: rgba(28,28,30,0.92);
-      --bar-fg: #f2f2f7;
-      --muted: #98989f;
-      --btn-bg: #2c2c2e;
-      --btn-active: #3a3a3c;
-      --border: rgba(255,255,255,0.12);
-    }
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; }
-  body {
-    font-family: system-ui, -apple-system, sans-serif;
-    height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
-    background: var(--bar-bg); color: var(--bar-fg);
-    -webkit-tap-highlight-color: transparent;
-  }
-  #map { flex: 1; min-height: 0; }
+*{box-sizing:border-box}
+body{margin:0}
+[hidden]{display:none!important}
 
-  /* Bottom toolbar: thumb-reachable, below the map so it never overlaps zoom or attribution */
-  #bar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 10px max(12px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-    background: var(--bar-bg); border-top: 1px solid var(--border);
-    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-  }
-  #status { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .btn {
-    display: inline-flex; align-items: center; justify-content: center;
-    min-height: 44px; padding: 0 16px; border: 0; border-radius: 12px;
-    font: 600 15px system-ui, -apple-system, sans-serif;
-    background: var(--btn-bg); color: var(--bar-fg); cursor: pointer; user-select: none;
-  }
-  .btn:active { background: var(--btn-active); }
-  .btn.primary { background: var(--accent); color: #fff; }
-  .btn:disabled { opacity: 0.5; }
-  #fileInput { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+/* Layout: one-screen map app. Sidebar (log + compare) on the left, map fills the rest; stacks map-over-panel on phones. */
+:root{
+  --paper:#f6f5ef;      /* panel ground, map land */
+  --land:#efeee4;
+  --sea:#c9dde3;
+  --lake:#a9cfdc;
+  --river:#7fb3c6;
+  --ink:#24261f;        /* text */
+  --muted:#6b6d61;
+  --rule:#dcdacd;
+  --trail:#6741d9;      /* past hikes: violet, a colour OSM's standard style barely uses */
+  --sel:#f76707;        /* selected hike */
+  --new:#e03131;        /* new ground */
+  --known:#6741d9;      /* already walked: same as past hikes */
+  --chip:#e8e6da;
+  --btn:#24261f; --btn-fg:#f6f5ef;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#1b1d1a;--land:#262923;--sea:#141b1f;--lake:#1f3a46;--river:#2f5868;--ink:#ecebe2;--muted:#a3a597;--rule:#33362f;
+  --chip:#2c2f28;--btn:#ecebe2;--btn-fg:#1b1d1a;color-scheme:dark}}
+:root[data-theme="dark"]{
+  --paper:#1b1d1a;--land:#262923;--sea:#141b1f;--lake:#1f3a46;--river:#2f5868;--ink:#ecebe2;--muted:#a3a597;--rule:#33362f;
+  --chip:#2c2f28;--btn:#ecebe2;--btn-fg:#1b1d1a;color-scheme:dark}
 
-  .leaflet-touch .leaflet-bar a { width: 40px; height: 40px; line-height: 40px; }
+html,body{height:100%}
+body{background:var(--paper);color:var(--ink);font:15px/1.45 var(--body);font-variant-numeric:tabular-nums}
+.app{height:100%;display:grid;grid-template-columns:minmax(300px,370px) minmax(0,1fr);min-height:0}
+.panel,.mapwrap{min-width:0}
+#map{height:100%;min-height:0;background:var(--sea);order:2}
+.panel{order:1;display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--rule);background:var(--paper)}
+.scroll{overflow-y:auto;min-height:0;flex:1;padding:0 18px 24px}
+header{padding:18px 18px 12px;display:grid;gap:10px;border-bottom:1px solid var(--rule)}
+h1{margin:0;font:700 30px/1 var(--display);letter-spacing:.01em;text-wrap:balance}
+h1 small{display:block;font:500 12px/1.2 var(--body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-top:6px}
+.stats{display:flex;gap:18px;flex-wrap:wrap}
+.stat b{display:block;font:600 24px/1 var(--display)}
+.stat span{font-size:12px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+button,.btn{font:600 14px/1 var(--body);border-radius:6px;border:1px solid var(--ink);background:transparent;color:var(--ink);padding:9px 12px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+button.primary{background:var(--btn);color:var(--btn-fg);border-color:var(--btn)}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible,.btn:focus-visible,.row:focus-visible,.chip:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+.status{font-size:13px;color:var(--muted);min-height:1.2em}
+.status.err{color:var(--new)}
+.status .bar{height:3px;background:var(--rule);border-radius:2px;margin-top:6px;overflow:hidden}
+.status .bar i{display:block;height:100%;background:var(--sel);width:0;transition:width .2s}
+h2{font:600 13px/1 var(--body);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:20px 0 10px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--rule);background:var(--chip);color:var(--ink);border-radius:999px;padding:5px 11px;font:500 13px/1 var(--body);cursor:pointer}
+.chip[aria-pressed="false"]{background:transparent;color:var(--muted)}
 
-  /* Info card for the selected hike: sits between map and toolbar, never over the trail */
-  #info {
-    display: flex; align-items: center; gap: 12px;
-    padding: 12px max(12px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
-    background: var(--bar-bg); border-top: 1px solid var(--border);
-  }
-  #info[hidden] { display: none; }
-  #infoSwatch { width: 6px; align-self: stretch; border-radius: 3px; flex: none; }
-  #infoText { flex: 1; min-width: 0; }
-  #infoTitle { font-weight: 600; font-size: 16px; line-height: 1.3; overflow-wrap: anywhere; }
-  #infoMeta { font-size: 14px; color: var(--muted); margin-top: 2px; }
-  #infoClose { flex: none; width: 36px; min-height: 36px; padding: 0; font-size: 20px; border-radius: 18px; }
+/* compare card */
+.card{border:1px solid var(--rule);border-radius:8px;padding:14px;margin-top:16px;display:grid;gap:10px;background:var(--land)}
+.card h3{margin:0;font:600 20px/1.1 var(--display);text-wrap:balance}
+.card .meta{font-size:13px;color:var(--muted)}
+.split{height:10px;border-radius:5px;overflow:hidden;display:flex;background:var(--new)}
+.split i{background:var(--known);display:block}
+.legend{display:flex;gap:14px;font-size:13px;flex-wrap:wrap}
+.legend span::before{content:"";display:inline-block;width:14px;height:4px;border-radius:2px;margin-right:6px;vertical-align:middle;background:var(--c)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:14px}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-weight:600}
+.olist{display:grid;gap:2px;margin:0;padding:0;list-style:none;font-size:14px}
+.olist button{border:0;padding:5px 0;width:100%;justify-content:space-between;font-weight:500;border-radius:0;border-bottom:1px dotted var(--rule)}
+.card .actions button{font-size:13px;padding:8px 10px}
+
+/* hike log */
+.year{font:700 22px/1 var(--display);margin:22px 0 6px;display:flex;justify-content:space-between;align-items:baseline}
+.year span{font:500 13px var(--body);color:var(--muted)}
+.row{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:baseline;padding:8px 6px;border-radius:6px;cursor:pointer;border-bottom:1px solid var(--rule)}
+.row:hover{background:var(--chip)}
+.row.sel{background:var(--chip);box-shadow:inset 3px 0 0 var(--sel)}
+.row .d{font:600 14px/1.2 var(--display);color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+.row .n{min-width:0;font-size:14px;line-height:1.3;overflow-wrap:anywhere}
+.row .n em{display:block;font-style:normal;font-size:12px;color:var(--muted)}
+.row .k{font:600 15px/1.2 var(--display);text-align:right;white-space:nowrap}
+.empty{color:var(--muted);font-size:14px;padding:12px 0}
+
+/* map overlays */
+.leaflet-container{background:var(--sea);font-family:var(--body)}
+.leaflet-tooltip{background:var(--paper);color:var(--ink);border:1px solid var(--rule);font:500 13px var(--body);box-shadow:none}
+.leaflet-tooltip:before{display:none}
+.leaflet-control-attribution{background:color-mix(in srgb,var(--paper) 80%,transparent)!important;color:var(--muted)!important;font-size:11px}
+.leaflet-control-attribution a{color:var(--muted)!important}
+.leaflet-bar a{background:var(--paper);color:var(--ink);border-color:var(--rule)}
+.leaflet-bar a:hover{background:var(--chip)}
+.scale{position:absolute;right:12px;bottom:26px;z-index:500;font:600 12px var(--display);color:var(--ink);pointer-events:none}
+.scale i{display:block;height:6px;border:2px solid var(--ink);border-top:0;margin-top:2px}
+.mapwrap{position:relative;order:2;min-height:0}
+.mapwrap #map{position:absolute;inset:0}
+.drop[hidden]{display:none}
+.drop{position:fixed;inset:0;z-index:2000;background:color-mix(in srgb,var(--new) 18%,transparent);border:3px dashed var(--new);display:grid;place-items:center;font:700 28px var(--display);color:var(--ink);pointer-events:none}
+
+@media (max-width:760px){
+  .app{grid-template-columns:minmax(0,1fr);grid-template-rows:56% 44%}
+  .mapwrap{order:1}
+  .panel{order:2;border-right:0;border-top:1px solid var(--rule)}
+  header{padding:12px 16px 10px}
+  h1{font-size:24px}
+  .scroll{padding:0 16px 20px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
-<div id="map"></div>
-<div id="info" hidden>
-  <span id="infoSwatch"></span>
-  <div id="infoText">
-    <div id="infoTitle"></div>
-    <div id="infoMeta"></div>
-  </div>
-  <button class="btn" id="infoClose" aria-label="Close">×</button>
+<div class="app">
+  <div class="mapwrap"><div id="map" role="application" aria-label="Kort over vandreture"></div><div class="scale" id="scale"></div></div>
+  <aside class="panel">
+    <header>
+      <h1>Vandrekort<small>Ture fra mappen “Vandreture gpx”</small></h1>
+      <div class="stats" id="stats">
+        <div class="stat"><b id="sN">–</b><span>ture</span></div>
+        <div class="stat"><b id="sKm">–</b><span>km i alt</span></div>
+        <div class="stat"><b id="sU">–</b><span>km unikke</span></div>
+      </div>
+      <div class="actions">
+        <button class="primary" id="pick" type="button">Tjek ny GPX</button>
+        <button id="reload" type="button">Genindlæs fra Drive</button>
+        <button id="login" type="button">Log ind med Google</button>
+        <input type="file" id="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden>
+      </div>
+      <div class="status" id="status" role="status" aria-live="polite">Indlæser…</div>
+    </header>
+    <div class="scroll" id="scroll">
+      <div id="compare"></div>
+      <h2>År</h2>
+      <div class="chips" id="years"></div>
+      <div id="list"><p class="empty">Dine ture dukker op her, så snart de er hentet fra Drive. Du kan også trække en GPX-fil ind på kortet for at se den med det samme.</p></div>
+    </div>
+  </aside>
 </div>
-<div id="bar">
-  <span id="status">No hikes loaded</span>
-  <label class="btn" for="fileInput">Add</label>
-  <input type="file" id="fileInput" accept=".gpx,application/gpx+xml" multiple>
-  <button class="btn primary" id="loadAllBtn">Load all</button>
-  <button class="btn" id="clearBtn">Clear</button>
-</div>
+<div class="drop" id="drop" hidden>Slip GPX-filen for at sammenligne</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://accounts.google.com/gsi/client" async></script>
+<script src="config.js"></script>
 <script>
-const map = L.map('map', { zoomControl: false }).setView([56.0, 10.0], 7);
-L.control.zoom({ position: 'topright' }).addTo(map);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-}).addTo(map);
+(() => {
+const FOLDER_ID = '1986o0uX2Dzm1krxZ7UpDhcTWI5Kztmyw';
+const CLIENT_ID = (window.VANDREKORT_CONFIG || {}).googleClientId || '';
+const SCOPE_READ = 'https://www.googleapis.com/auth/drive.readonly';
+const SCOPE_WRITE = 'https://www.googleapis.com/auth/drive';
+const API = 'https://www.googleapis.com/drive/v3';
+const CELL = 20;               // overlap grid, metres
+const DK = [[54.55, 8.0], [57.75, 12.7]];
+const $ = id => document.getElementById(id);
+const nf1 = new Intl.NumberFormat('da-DK', {maximumFractionDigits: 1, minimumFractionDigits: 1});
+const nf0 = new Intl.NumberFormat('da-DK', {maximumFractionDigits: 0});
+const MONTHS = ['jan','feb','mar','apr','maj','jun','jul','aug','sep','okt','nov','dec'];
 
-const NORMAL = { weight: 4, opacity: 0.85 };
-const SELECTED = { weight: 8, opacity: 1 };
-const hikes = new Map(); // key (file name) -> {name, date, km, layer, hitbox}
-let selectedHike = null;
-let colorIndex = 0;
+const S = { tracks: [], byId: new Map(), selected: null, cand: null, hiddenYears: new Set(), grid: new Map(), lines: new Map(), token: null, files: new Map() };
 
-const statusEl = document.getElementById('status');
-const loadAllBtn = document.getElementById('loadAllBtn');
+/* ---------- theme tokens for canvas ---------- */
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let C = {};
+function readTokens(){ C = { land: tok('--land'), trail: tok('--trail'), sel: tok('--sel'), nw: tok('--new'), known: tok('--known') }; }
+readTokens();
 
-// Golden-angle hues keep neighbouring hikes visually distinct
-function nextColor() {
-  const hue = (colorIndex++ * 137.508) % 360;
-  return `hsl(${hue.toFixed(0)}, 75%, 45%)`;
+/* ---------- map ---------- */
+const map = L.map('map', { preferCanvas: true, minZoom: 3, maxZoom: 19 });
+const renderer = L.canvas({ tolerance: 6, padding: 0.3 });
+map.fitBounds(DK);
+map.attributionControl.setPrefix(false);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-bidragydere' }).addTo(map);
+const trailsLayer = L.layerGroup().addTo(map);
+const candLayer = L.layerGroup().addTo(map);
+
+function zoomClass(){
+  // scale bar
+  const y = map.getSize().y - 30, p1 = map.containerPointToLatLng([0, y]), p2 = map.containerPointToLatLng([100, y]);
+  const m = p1.distanceTo(p2); const steps = [50,100,200,500,1000,2000,5000,10000,20000,50000,100000];
+  const s = steps.find(v => v >= m * 0.6) || 100000; const px = 100 * s / m;
+  $('scale').innerHTML = `${s >= 1000 ? nf0.format(s/1000) + ' km' : s + ' m'}<i style="width:${px.toFixed(0)}px"></i>`;
+}
+map.on('zoomend moveend', zoomClass); zoomClass();
+
+/* ---------- geometry helpers ---------- */
+const R = 6371008.8, rad = Math.PI / 180;
+function hav(a, b){ const dl = (b[0]-a[0])*rad, dn = (b[1]-a[1])*rad; const s = Math.sin(dl/2)**2 + Math.cos(a[0]*rad)*Math.cos(b[0]*rad)*Math.sin(dn/2)**2; return 2*R*Math.asin(Math.sqrt(s)); }
+function cellOf(p){ const y = p[0]*111320, x = p[1]*111320*Math.cos(p[0]*rad); return [Math.floor(x/CELL), Math.floor(y/CELL)]; }
+function eachDense(pts, fn){ // visit points every <=12 m along the line
+  for (let i = 0; i < pts.length; i++){
+    if (i){ const a = pts[i-1], b = pts[i], d = hav(a, b), n = Math.floor(d/12);
+      for (let k = 1; k < n; k++){ const t = k/n; fn([a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t]); } }
+    fn(pts[i]);
+  }
+}
+function addToGrid(grid, pts, idx){ eachDense(pts, p => { const [x,y] = cellOf(p), k = x+','+y; let s = grid.get(k); if (!s){ s = []; grid.set(k, s); } if (s[s.length-1] !== idx && !s.includes(idx)) s.push(idx); }); }
+function near(grid, p, skip){ // returns array of track idx near p (3x3 cells)
+  const [x,y] = cellOf(p); let out = null;
+  for (let dx=-1; dx<=1; dx++) for (let dy=-1; dy<=1; dy++){ const s = grid.get((x+dx)+','+(y+dy)); if (s) for (const i of s) if (i !== skip){ (out ||= new Set()).add(i); } }
+  return out;
 }
 
-function haversineMeters(a, b) {
-  const R = 6371000, toRad = d => d * Math.PI / 180;
-  const dLat = toRad(b[0] - a[0]), dLon = toRad(b[1] - a[1]);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(h));
-}
-
-function segmentsLength(segments) {
-  let d = 0;
-  for (const seg of segments)
-    for (let i = 1; i < seg.length; i++) d += haversineMeters(seg[i - 1], seg[i]);
-  return d;
-}
-
-function readPoints(parent, tag) {
-  return [...parent.getElementsByTagName(tag)]
-    .map(el => [parseFloat(el.getAttribute('lat')), parseFloat(el.getAttribute('lon'))])
-    .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
-}
-
-// Each <trkseg> becomes its own line so pauses don't draw straight jumps
-function parseGpx(text, fallbackName) {
+/* ---------- GPX parsing ---------- */
+function cleanTitle(t){ return t.replace(/\.gpx$/i,'').replace(/^\d{4}-\d{2}-\d{2}_/,'').replace(/_\d{6,}$/,'').replace(/_/g,' ').trim(); }
+function parseGpx(text, meta){
   const doc = new DOMParser().parseFromString(text, 'application/xml');
-  let segments = [...doc.getElementsByTagName('trkseg')].map(seg => readPoints(seg, 'trkpt'));
-  segments = segments.filter(s => s.length > 1);
-  if (!segments.length) {
-    const route = readPoints(doc, 'rtept');
-    if (route.length > 1) segments = [route];
+  if (doc.querySelector('parsererror')) throw new Error('Filen er ikke gyldig GPX');
+  let nodes = [...doc.getElementsByTagName('trkpt')];
+  if (!nodes.length) nodes = [...doc.getElementsByTagName('rtept')];
+  if (nodes.length < 2) throw new Error('Filen indeholder ingen spor');
+  const full = [], ele = [], times = [];
+  for (const n of nodes){
+    const la = parseFloat(n.getAttribute('lat')), lo = parseFloat(n.getAttribute('lon'));
+    if (!isFinite(la) || !isFinite(lo)) continue;
+    full.push([la, lo]);
+    const e = n.getElementsByTagName('ele')[0]; ele.push(e ? parseFloat(e.textContent) : NaN);
+    const t = n.getElementsByTagName('time')[0]; times.push(t ? t.textContent : null);
   }
-
-  const metaName = doc.querySelector('metadata > name, gpx > name');
-  const name = metaName?.textContent.trim() || fallbackName;
-
-  let date = doc.querySelector('metadata > time, gpx > time')?.textContent.trim().slice(0, 10) || '';
-  if (!date) date = fallbackName.match(/(\d{4}-\d{2}-\d{2})/)?.[1] || '';
-
-  return { segments, name, date };
+  let km = 0, gain = 0, ref = NaN;
+  for (let i=1;i<full.length;i++) km += hav(full[i-1], full[i]);
+  for (const e of ele){ if (!isFinite(e)) continue; if (!isFinite(ref)) ref = e; else if (e - ref > 3){ gain += e - ref; ref = e; } else if (ref - e > 3) ref = e; }
+  const t0 = times.find(Boolean), t1 = [...times].reverse().find(Boolean);
+  const dur = t0 && t1 ? (Date.parse(t1) - Date.parse(t0)) / 60000 : null;
+  const pts = [full[0]]; // decimate to >= 8 m spacing
+  for (let i=1;i<full.length;i++) if (hav(pts[pts.length-1], full[i]) >= 8 || i === full.length-1) pts.push([+full[i][0].toFixed(5), +full[i][1].toFixed(5)]);
+  const nameEl = doc.querySelector('metadata > name') || doc.querySelector('trk > name');
+  const fileDate = (meta.title || '').match(/^(\d{4}-\d{2}-\d{2})/);
+  const date = fileDate ? fileDate[1] : (t0 ? t0.slice(0,10) : '');
+  let s=90,w=180,nn=-90,e=-180; for (const p of pts){ s=Math.min(s,p[0]); nn=Math.max(nn,p[0]); w=Math.min(w,p[1]); e=Math.max(e,p[1]); }
+  return { id: meta.id, title: meta.title || '', modified: meta.modifiedTime || '', viewUrl: meta.viewUrl || '',
+    name: (nameEl && nameEl.textContent.trim()) || cleanTitle(meta.title || 'Uden navn'), date, start: t0 || null,
+    km: km/1000, gain: Math.round(gain), dur: dur && dur > 0 ? Math.round(dur) : null, bbox: [[s,w],[nn,e]], pts };
 }
 
-function updateStatus(extra = '') {
-  let km = 0;
-  for (const h of hikes.values()) km += h.km;
-  const base = hikes.size
-    ? `${hikes.size} hike${hikes.size === 1 ? '' : 's'} · ${Math.round(km).toLocaleString()} km`
-    : 'No hikes loaded';
-  statusEl.textContent = extra ? `${base} · ${extra}` : base;
-}
+/* ---------- local cache (per browser, convenience only) ---------- */
+const idb = (() => {
+  let dbp = null;
+  function open(){ if (dbp) return dbp; dbp = new Promise((res, rej) => { try { const r = indexedDB.open('vandrekort', 1); r.onupgradeneeded = () => r.result.createObjectStore('tracks', { keyPath: 'id' }); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); } catch (e) { rej(e); } }); return dbp; }
+  async function tx(mode, fn){ try { const db = await open(); return await new Promise((res, rej) => { const t = db.transaction('tracks', mode), st = t.objectStore('tracks'); const r = fn(st); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); }); } catch { return null; } }
+  return { all: () => tx('readonly', s => s.getAll()), put: v => tx('readwrite', s => s.put(v)), del: id => tx('readwrite', s => s.delete(id)) };
+})();
 
-// "2026-09-28_Aarhus_Noerreris-Skov_Hattemagerskov_6km_422927013.gpx"
-//   -> "Aarhus · Noerreris Skov · Hattemagerskov" (date, km and AllTrails id shown separately)
-function nameFromFile(key) {
-  const label = key
-    .replace(/\.gpx$/i, '')
-    .replace(/^\d{4}-\d{2}-\d{2}[_-]?/, '')
-    .replace(/_\d{6,}$/, '')
-    .replace(/_\d+km(_\d+days)?$/, '');
-  return label.split('_').filter(Boolean).map(p => p.replace(/-/g, ' ')).join(' · ');
-}
-
-const infoEl = document.getElementById('info');
-
-function showInfo(hike) {
-  if (!hike) { infoEl.hidden = true; map.invalidateSize(); return; }
-  document.getElementById('infoSwatch').style.background = hike.color;
-  document.getElementById('infoTitle').textContent = hike.name;
-  const days = hike.key.match(/_(\d+)days/)?.[1];
-  document.getElementById('infoMeta').textContent =
-    [hike.date, `${hike.km.toFixed(1)} km`, days && `${days} days`].filter(Boolean).join(' · ');
-  infoEl.hidden = false;
-  map.invalidateSize();
-  // Only move the map if the selected trail isn't fully visible
-  const bounds = hike.hitbox.getBounds();
-  if (!map.getBounds().contains(bounds)) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
-}
-
-function selectHike(hike) {
-  if (selectedHike) selectedHike.layer.setStyle(NORMAL);
-  selectedHike = hike;
-  if (hike) {
-    hike.layer.setStyle(SELECTED);
-    hike.layer.bringToFront();
-  }
-  showInfo(hike);
-}
-
-document.getElementById('infoClose').onclick = () => selectHike(null);
-
-// Returns the new hike, or null if this file is already on the map or has no track
-function addHike(key, text) {
-  if (hikes.has(key)) return null;
-  const { segments, name, date } = parseGpx(text, key.replace(/\.gpx$/i, ''));
-  if (!segments.length) return null;
-
-  const km = segmentsLength(segments) / 1000;
-  const color = nextColor();
-  // Wide invisible line underneath makes tracks easy to tap on a phone
-  const hitbox = L.polyline(segments, { color: '#000', weight: 22, opacity: 0 }).addTo(map);
-  const layer = L.polyline(segments, { color, ...NORMAL, interactive: false }).addTo(map);
-  // Prefer the descriptive file name; fall back to the GPX's own name for unrenamed uploads
-  const fileName = nameFromFile(key);
-  const generic = /^[^·]* · Vandring$|^Vandring$/i.test(fileName);
-  const hike = { key, name: fileName && !generic ? fileName : name, date, km, color, layer, hitbox };
-
-  hitbox.on('click', e => {
-    L.DomEvent.stopPropagation(e);
-    selectHike(hike);
+/* ---------- derived data ---------- */
+function rebuild(){
+  S.tracks.sort((a,b) => (a.date + (a.start||'')).localeCompare(b.date + (b.start||'')));
+  S.byId = new Map(S.tracks.map(t => [t.id, t]));
+  // chronological "new ground" per hike + full grid for comparisons
+  const grid = new Map();
+  S.tracks.forEach((t, i) => {
+    let nw = 0;
+    for (let j=1;j<t.pts.length;j++){ const p = t.pts[j]; if (!near(grid, p, -1)) nw += hav(t.pts[j-1], p); }
+    t.newKm = nw/1000;
+    addToGrid(grid, t.pts, i);
   });
-
-  hikes.set(key, hike);
-  return hike;
+  S.grid = grid;
 }
 
-// Most recent hikes by date (ISO dates sort as text); undated hikes count as oldest
-function latestHikes(n) {
-  return [...hikes.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, n);
-}
-
-function fitTo(list) {
-  if (!list.length) return;
-  const bounds = L.featureGroup(list.map(h => h.hitbox)).getBounds();
-  map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
-}
-
-document.getElementById('fileInput').addEventListener('change', async e => {
-  const added = [];
-  const failed = [];
-  for (const file of e.target.files) {
-    const hike = addHike(file.name, await file.text());
-    if (hike) added.push(hike);
-    else if (!hikes.has(file.name)) failed.push(file.name);
+/* ---------- rendering ---------- */
+function visible(t){ return !S.hiddenYears.has(t.date.slice(0,4)); }
+function redrawTrails(){
+  trailsLayer.clearLayers(); S.lines.clear();
+  for (const t of S.tracks){
+    if (!visible(t)) continue;
+    const isSel = S.selected === t.id;
+    const pl = L.polyline(t.pts, { renderer, color: isSel ? C.sel : C.trail, weight: isSel ? 4.5 : 2.4, opacity: isSel ? 1 : (S.cand ? 0.35 : 0.7), lineJoin: 'round' });
+    pl.bindTooltip(`${t.name} · ${fmtDate(t.date)}`, { sticky: true, direction: 'top', offset: [0,-6] });
+    pl.on('click', () => select(t.id, false));
+    pl.on('mouseover', () => { if (S.selected !== t.id) pl.setStyle({ color: C.sel, opacity: 1 }); });
+    pl.on('mouseout', () => { if (S.selected !== t.id) pl.setStyle({ color: C.trail, opacity: S.cand ? 0.35 : 0.7 }); });
+    pl.addTo(trailsLayer); S.lines.set(t.id, pl);
   }
-  e.target.value = '';
-  fitTo(added);
-  updateStatus();
-  if (failed.length) alert(`No track points found in:\n${failed.join('\n')}`);
+  const s = S.lines.get(S.selected); if (s) s.bringToFront();
+  drawCand();
+}
+function drawCand(){
+  candLayer.clearLayers();
+  const c = S.cand; if (!c) return;
+  for (const run of c.runs) L.polyline(run.pts, { renderer, color: run.known ? C.known : C.nw, weight: 5, opacity: 1, lineCap: 'round', interactive: false }).addTo(candLayer);
+  L.circleMarker(c.pts[0], { renderer, radius: 6, color: C.nw, weight: 3, fillColor: C.land, fillOpacity: 1, interactive: false }).addTo(candLayer);
+}
+const fmtDate = d => { if (!d) return ''; const [y,m,dd] = d.split('-'); return `${+dd}. ${MONTHS[+m-1]} ${y}`; };
+const fmtDur = m => m == null ? '–' : (m >= 60 ? `${Math.floor(m/60)} t ${m%60} min` : `${m} min`);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function renderStats(){
+  const vis = S.tracks;
+  $('sN').textContent = vis.length ? nf0.format(vis.length) : '–';
+  $('sKm').textContent = vis.length ? nf0.format(vis.reduce((a,t) => a + t.km, 0)) : '–';
+  $('sU').textContent = vis.length ? nf0.format(vis.reduce((a,t) => a + t.newKm, 0)) : '–';
+}
+function renderYears(){
+  const years = [...new Set(S.tracks.map(t => t.date.slice(0,4)))].filter(Boolean).sort();
+  $('years').innerHTML = years.map(y => `<button class="chip" type="button" data-y="${y}" aria-pressed="${!S.hiddenYears.has(y)}">${y}</button>`).join('');
+}
+$('years').addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; const y = b.dataset.y; S.hiddenYears.has(y) ? S.hiddenYears.delete(y) : S.hiddenYears.add(y); renderYears(); renderList(); redrawTrails(); });
+
+function renderList(){
+  if (!S.tracks.length){ return; }
+  const groups = new Map();
+  [...S.tracks].reverse().forEach(t => { if (!visible(t)) return; const y = t.date.slice(0,4) || '?'; (groups.get(y) || groups.set(y, []).get(y)).push(t); });
+  let h = '';
+  for (const [y, ts] of groups){
+    h += `<div class="year">${y}<span>${ts.length} ture · ${nf0.format(ts.reduce((a,t)=>a+t.km,0))} km</span></div>`;
+    for (const t of ts){
+      const [, m, d] = t.date.split('-');
+      const pct = t.km ? Math.round(100 * t.newKm / t.km) : 0;
+      h += `<div class="row${S.selected===t.id?' sel':''}" tabindex="0" role="button" data-id="${t.id}"><div class="d">${+d}. ${MONTHS[+m-1]}</div><div class="n">${esc(t.name)}<em>${pct}% nyt terræn${t.gain ? ` · +${t.gain} m` : ''}</em></div><div class="k">${nf1.format(t.km)} km</div></div>`;
+    }
+  }
+  $('list').innerHTML = h || '<p class="empty">Ingen ture i de valgte år.</p>';
+}
+$('list').addEventListener('click', e => { const r = e.target.closest('.row'); if (r) select(r.dataset.id, true); });
+$('list').addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('row')){ e.preventDefault(); select(e.target.dataset.id, true); } });
+
+function select(id, fly){
+  S.selected = S.selected === id && !fly ? null : id;
+  const t = S.byId.get(S.selected);
+  if (t && fly) map.flyToBounds(t.bbox, { padding: [40,40], maxZoom: 15, duration: 0.6 });
+  redrawTrails(); renderList(); renderCompare();
+  if (t && !fly){ const row = document.querySelector(`.row[data-id="${CSS.escape(id)}"]`); row && row.scrollIntoView({ block: 'nearest' }); }
+}
+
+/* ---------- comparison ---------- */
+function compare(c, skipId){
+  const skip = skipId != null ? S.tracks.findIndex(t => t.id === skipId) : -1;
+  const flags = c.pts.map(p => near(S.grid, p, skip));
+  const runs = []; let known = 0, total = 0; const share = new Map();
+  for (let i=1;i<c.pts.length;i++){
+    const d = hav(c.pts[i-1], c.pts[i]); total += d;
+    const k = !!(flags[i] && flags[i-1]);
+    if (k){ known += d; for (const j of flags[i]) if (flags[i-1].has(j)) share.set(j, (share.get(j)||0) + d); }
+    const last = runs[runs.length-1];
+    if (last && last.known === k) last.pts.push(c.pts[i]); else runs.push({ known: k, pts: [c.pts[i-1], c.pts[i]] });
+  }
+  const overlaps = [...share].map(([j, m]) => ({ t: S.tracks[j], km: m/1000 })).filter(o => o.km >= 0.1).sort((a,b) => b.km - a.km);
+  return { ...c, runs, knownKm: known/1000, totalKm: total/1000, overlaps, skipId };
+}
+function setCandidate(c, skipId){
+  S.cand = compare(c, skipId);
+  redrawTrails(); renderCompare();
+  map.flyToBounds(c.bbox, { padding: [40,40], maxZoom: 15, duration: 0.6 });
+  $('scroll').scrollTop = 0;
+}
+function renderCompare(){
+  const el = $('compare'), c = S.cand, t = S.byId.get(S.selected);
+  let h = '';
+  if (c){
+    const pct = c.totalKm ? Math.round(100 * c.knownKm / c.totalKm) : 0;
+    h += `<section class="card" aria-label="Sammenligning">
+      <div class="meta">${c.skipId ? 'Sammenlignet med dine andre ture' : 'Ny rute · ' + esc(c.title)}</div>
+      <h3>${esc(c.name)}</h3>
+      <div class="split" title="${pct}% kendt"><i style="width:${pct}%"></i></div>
+      <div class="legend"><span style="--c:var(--known)">Gået før · ${nf1.format(c.knownKm)} km (${pct}%)</span><span style="--c:var(--new)">Nyt · ${nf1.format(c.totalKm - c.knownKm)} km</span></div>
+      ${c.overlaps.length ? `<div class="meta">Overlapper med ${c.overlaps.length} ${c.overlaps.length === 1 ? 'tur' : 'ture'}</div><ul class="olist">${c.overlaps.slice(0,8).map(o => `<li><button type="button" data-id="${o.t.id}"><span>${fmtDate(o.t.date)} · ${esc(o.t.name)}</span><span>${nf1.format(o.km)} km</span></button></li>`).join('')}</ul>` : `<div class="meta">Ingen af dine tidligere ture rører denne rute.</div>`}
+      <div class="actions">
+        ${!c.skipId && c.b64 ? `<button class="primary" type="button" id="save" ${S.token ? '' : 'disabled'}>Gem i Drive</button>` : ''}
+        <button type="button" id="clear">Luk sammenligning</button>
+      </div>
+      <div class="status" id="saveStatus"></div>
+    </section>`;
+  } else if (t){
+    h += `<section class="card" aria-label="Valgt tur">
+      <div class="meta">${fmtDate(t.date)}</div>
+      <h3>${esc(t.name)}</h3>
+      <dl class="kv"><dt>Distance</dt><dd>${nf1.format(t.km)} km</dd><dt>Tid</dt><dd>${fmtDur(t.dur)}</dd><dt>Stigning</dt><dd>${t.gain ? '+' + t.gain + ' m' : '–'}</dd><dt>Nyt terræn</dt><dd>${nf1.format(t.newKm)} km (${t.km ? Math.round(100*t.newKm/t.km) : 0}%)</dd></dl>
+      <div class="actions">
+        <button class="primary" type="button" id="cmpSel">Sammenlign med resten</button>
+        ${t.viewUrl ? `<a class="btn" href="${esc(t.viewUrl)}" target="_blank" rel="noopener">Åbn i Drive</a>` : ''}
+        <a class="btn" href="https://www.openstreetmap.org/?mlat=${t.pts[0][0]}&mlon=${t.pts[0][1]}#map=14/${t.pts[0][0]}/${t.pts[0][1]}" target="_blank" rel="noopener">OpenStreetMap</a>
+      </div>
+    </section>`;
+  }
+  el.innerHTML = h;
+}
+$('compare').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.id === 'clear'){ S.cand = null; redrawTrails(); renderCompare(); }
+  else if (b.id === 'cmpSel'){ const t = S.byId.get(S.selected); if (t) setCandidate({ name: t.name, title: t.title, pts: t.pts, bbox: t.bbox }, t.id); }
+  else if (b.id === 'save') saveToDrive(b);
+  else if (b.dataset.id) select(b.dataset.id, false);
 });
 
-// Fetch with a small concurrency limit so phones don't choke on ~100 files
-async function mapLimit(items, limit, fn) {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) await fn(items[next++]);
-  });
-  await Promise.all(workers);
-}
-
-loadAllBtn.onclick = async () => {
-  loadAllBtn.disabled = true;
+/* ---------- new GPX from file ---------- */
+async function readFile(f){
   try {
-    const res = await fetch('gpx/index.json', { cache: 'no-cache' });
-    if (!res.ok) throw new Error('gpx/index.json not found — run the sync-gpx skill first');
-    const files = (await res.json()).filter(f => !hikes.has(f));
-    let done = 0, failed = 0;
-    await mapLimit(files, 6, async f => {
-      try {
-        const r = await fetch('gpx/' + encodeURIComponent(f));
-        if (!r.ok) throw new Error(r.status);
-        if (!addHike(f, await r.text())) failed++;
-      } catch { failed++; }
-      updateStatus(`loading ${++done}/${files.length}`);
-    });
-    updateStatus(failed ? `${failed} failed` : '');
-    fitTo(latestHikes(3));
-  } catch (err) {
-    updateStatus();
-    alert('Could not load hikes: ' + err.message);
-  } finally {
-    loadAllBtn.disabled = false;
+    const buf = await f.arrayBuffer(); const text = new TextDecoder('utf-8').decode(buf);
+    const c = parseGpx(text, { title: f.name, id: null });
+    let bin = ''; const u = new Uint8Array(buf); for (let i=0;i<u.length;i+=0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i+0x8000));
+    c.b64 = btoa(bin); c.size = buf.byteLength; c.title = f.name;
+    setCandidate(c, null);
+    setStatus(`“${f.name}” er lagt på kortet.`);
+  } catch (e) { setStatus(`Kunne ikke læse “${f.name}”: ${e.message}`, true); }
+}
+$('pick').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', e => { const f = e.target.files[0]; if (f) readFile(f); e.target.value = ''; });
+let dragDepth = 0;
+addEventListener('dragenter', e => { if ([...(e.dataTransfer?.types||[])].includes('Files')){ dragDepth++; $('drop').hidden = false; } });
+addEventListener('dragleave', () => { if (--dragDepth <= 0){ dragDepth = 0; $('drop').hidden = true; } });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; $('drop').hidden = true; const f = e.dataTransfer?.files?.[0]; if (f) readFile(f); });
+
+/* ---------- Google Drive ---------- */
+function setStatus(msg, err, prog){
+  const el = $('status'); el.classList.toggle('err', !!err);
+  el.innerHTML = esc(msg) + (prog != null ? `<div class="bar"><i style="width:${Math.round(prog*100)}%"></i></div>` : '');
+}
+/* The access token lives in this tab's sessionStorage only; Google expires it after an hour. */
+function loadToken(){ try { const t = JSON.parse(sessionStorage.getItem('vk-token') || 'null'); if (t && t.exp > Date.now() + 60000) return t; } catch {} return null; }
+function storeToken(t){ S.token = t; try { t ? sessionStorage.setItem('vk-token', JSON.stringify(t)) : sessionStorage.removeItem('vk-token'); } catch {} renderLogin(); }
+function hasScope(sc){ return !!(S.token && S.token.scope.split(' ').includes(sc)); }
+function renderLogin(){ $('login').textContent = S.token ? 'Log ud' : 'Log ind med Google'; $('reload').disabled = !S.token || syncing; }
+class DriveError extends Error { constructor(code, status, msg){ super(msg || code); this.code = code; this.status = status; } }
+let tokenClient = null;
+function requestToken(scope){
+  return new Promise((resolve, reject) => {
+    if (!CLIENT_ID) return reject(new DriveError('no_client'));
+    if (!window.google || !google.accounts || !google.accounts.oauth2) return reject(new DriveError('gis_missing'));
+    tokenClient ||= google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPE_READ, callback: () => {} });
+    tokenClient.callback = r => {
+      if (r.error) return reject(new DriveError(r.error));
+      storeToken({ access: r.access_token, scope: r.scope, exp: Date.now() + (r.expires_in || 3600) * 1000 });
+      resolve();
+    };
+    tokenClient.error_callback = e => reject(new DriveError((e && e.type) || 'popup_failed'));
+    tokenClient.requestAccessToken({ scope, include_granted_scopes: true, prompt: '' });
+  });
+}
+function driveMsg(e){
+  switch (e && e.code){
+    case 'no_client': return 'Mangler Google-nøgle. Sæt googleClientId i config.js (se README).';
+    case 'gis_missing': return 'Googles login-script kunne ikke hentes. Tjek forbindelsen, og prøv igen.';
+    case 'popup_closed': case 'access_denied': return 'Login blev afbrudt. Tryk “Log ind med Google” for at prøve igen.';
+    case 'popup_failed_to_open': case 'popup_failed': return 'Browseren blokerede login-vinduet. Tillad pop op-vinduer for siden, og prøv igen.';
+    case 'expired': return 'Login er udløbet. Tryk “Log ind med Google” for at hente nye ture.';
+    case 'forbidden': return 'Google afviste adgang til mappen “Vandreture gpx”: ' + (e.message || '');
+    case 'not_found': return 'Mappen “Vandreture gpx” blev ikke fundet på den Google-konto, du loggede ind med.';
+    default: return 'Kunne ikke nå Google Drive lige nu' + (e && e.status ? ` (${e.status})` : '') + '. Prøv “Genindlæs fra Drive” om lidt.';
   }
-};
+}
+async function api(url, opts = {}, retry = true){
+  if (!S.token) throw new DriveError('expired');
+  const r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + S.token.access } });
+  if (r.ok) return r;
+  if (r.status === 401){ storeToken(null); throw new DriveError('expired', 401); }
+  if ((r.status === 429 || r.status >= 500) && retry){ await new Promise(res => setTimeout(res, 1200 + Math.random() * 800)); return api(url, opts, false); }
+  let msg = ''; try { msg = (await r.json()).error.message; } catch {}
+  throw new DriveError(r.status === 404 ? 'not_found' : r.status === 403 ? 'forbidden' : 'http', r.status, msg);
+}
+async function listFolder(){
+  const files = []; let pageToken = '';
+  do {
+    const q = new URLSearchParams({ q: `'${FOLDER_ID}' in parents and trashed = false`, fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)', pageSize: '1000' });
+    if (pageToken) q.set('pageToken', pageToken);
+    const p = await (await api(`${API}/files?${q}`)).json();
+    for (const f of p.files || []) files.push({ id: f.id, title: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime, viewUrl: f.webViewLink });
+    pageToken = p.nextPageToken || '';
+  } while (pageToken);
+  return files;
+}
+let syncing = false;
+async function sync(){
+  if (syncing || !S.token) return; syncing = true; renderLogin();
+  try {
+    setStatus('Henter filliste fra “Vandreture gpx”…', false, 0);
+    const files = await listFolder();
+    const gpx = files.filter(f => /\.gpx$/i.test(f.title || '') || /gpx/i.test(f.mimeType || ''));
+    S.files = new Map(gpx.map(f => [f.id, f]));
+    const ids = new Set(gpx.map(f => f.id));
+    let removed = 0;
+    for (const t of [...S.tracks]) if (!ids.has(t.id)){ S.tracks.splice(S.tracks.indexOf(t), 1); idb.del(t.id); removed++; }
+    const todo = gpx.filter(f => { const t = S.tracks.find(x => x.id === f.id); return !t || t.modified !== f.modifiedTime; });
+    let done = 0, failed = [];
+    const work = async () => {
+      while (todo.length){
+        const f = todo.shift();
+        try {
+          const text = await (await api(`${API}/files/${encodeURIComponent(f.id)}?alt=media`)).text();
+          const t = parseGpx(text, f);
+          const i = S.tracks.findIndex(x => x.id === f.id); if (i >= 0) S.tracks[i] = t; else S.tracks.push(t);
+          idb.put(t);
+        } catch (e) { if (e instanceof DriveError && e.code !== 'http') throw e; failed.push(f.title); }
+        done++;
+        setStatus(`Henter ture fra Drive… ${done} af ${done + todo.length}`, false, done / (done + todo.length));
+        if (done % 8 === 0) refresh(false);
+      }
+    };
+    await Promise.all([work(), work(), work(), work()]);
+    refresh(true);
+    const n = S.tracks.length;
+    setStatus(failed.length ? `${n} ture indlæst. ${failed.length} fil(er) kunne ikke læses: ${failed.slice(0,3).join(', ')}` : `${n} ture fra Drive · opdateret ${new Date().toLocaleTimeString('da-DK',{hour:'2-digit',minute:'2-digit'})}${done ? ` · ${done} nye/ændrede` : ''}${removed ? ` · ${removed} fjernet` : ''}`, failed.length > 0);
+  } catch (e) {
+    setStatus(driveMsg(e), true);
+    refresh(true);
+  } finally { syncing = false; renderLogin(); renderCompare(); }
+}
+function refresh(fit){
+  rebuild(); renderStats(); renderYears(); renderList();
+  if (S.cand) S.cand = compare(S.cand, S.cand.skipId);
+  redrawTrails(); renderCompare();
+  if (fit && !S.selected && !S.cand && !refresh.fitted){
+    const dk = S.tracks.filter(t => t.bbox[0][0] > 54.4 && t.bbox[1][0] < 57.9 && t.bbox[0][1] > 7.8 && t.bbox[1][1] < 15.3);
+    if (dk.length){ const b = L.latLngBounds(dk.flatMap(t => t.bbox)); map.fitBounds(b, { padding: [30,30], maxZoom: 12 }); refresh.fitted = true; }
+  }
+}
+async function saveToDrive(btn){
+  const c = S.cand, st = $('saveStatus'); if (!c || !c.b64 || !S.token) return;
+  if ([...S.files.values()].some(f => f.title === c.title)){ st.textContent = `Der findes allerede en fil med navnet “${c.title}” i mappen.`; st.classList.add('err'); return; }
+  btn.disabled = true; st.classList.remove('err'); st.textContent = 'Gemmer i “Vandreture gpx”…';
+  try {
+    // Saving needs write access; ask for it only now, on top of the read access
+    if (!hasScope(SCOPE_WRITE)) await requestToken(SCOPE_WRITE);
+    const boundary = 'vk' + Math.random().toString(36).slice(2);
+    const meta = JSON.stringify({ name: c.title, parents: [FOLDER_ID], mimeType: 'application/gpx+xml' });
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/gpx+xml\r\nContent-Transfer-Encoding: base64\r\n\r\n${c.b64}\r\n--${boundary}--`;
+    await api('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body }, false);
+    S.cand = null; renderCompare(); setStatus(`“${c.title}” er gemt i Drive.`);
+    await sync();
+  } catch (e) {
+    st.classList.add('err');
+    st.textContent = e instanceof DriveError && e.code !== 'http' ? driveMsg(e) : 'Svaret fra Drive udeblev. Filen kan være gemt: tryk “Genindlæs fra Drive” og tjek, før du prøver igen.';
+    btn.disabled = false;
+  }
+}
+$('reload').addEventListener('click', sync);
+$('login').addEventListener('click', async () => {
+  if (S.token){
+    try { google.accounts.oauth2.revoke(S.token.access); } catch {}
+    storeToken(null); setStatus('Logget ud. Turene i denne browser bliver vist, indtil du logger ind igen.'); return;
+  }
+  try { await requestToken(SCOPE_READ); await sync(); } catch (e) { setStatus(driveMsg(e), true); }
+});
 
-document.getElementById('clearBtn').onclick = () => {
-  selectHike(null);
-  for (const h of hikes.values()) { map.removeLayer(h.layer); map.removeLayer(h.hitbox); }
-  hikes.clear();
-  colorIndex = 0;
-  updateStatus();
-};
+/* ---------- theme changes ---------- */
+function retheme(){ readTokens(); redrawTrails(); }
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', retheme);
+new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
-map.on('click', () => selectHike(null));
+/* ---------- boot ---------- */
+(async () => {
+  const cached = await idb.all();
+  const n = cached ? cached.length : 0;
+  if (n){ S.tracks = cached; refresh(true); }
+  S.token = loadToken(); renderLogin(); renderCompare();
+  if (S.token){ if (n) setStatus(`${n} ture fra sidste besøg · tjekker Drive…`); sync(); }
+  else if (!CLIENT_ID) setStatus(driveMsg({ code: 'no_client' }), true);
+  else setStatus(n ? `${n} ture fra sidste besøg. Log ind for at hente nye.` : 'Log ind med Google for at hente dine ture fra “Vandreture gpx”.');
+})();
+})();
 </script>
 </body>
 </html>
