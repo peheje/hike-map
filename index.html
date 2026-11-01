@@ -174,16 +174,24 @@ readTokens();
 
 /* ---------- map ---------- */
 const map = L.map('map', { preferCanvas: true, minZoom: 3, maxZoom: 19, scrollWheelZoom: false });
-// One wheel notch = one zoom step. Leaflet's wheel zoom rounds every partial batch of a
-// smooth-scroll burst up to a whole level, so one notch could give 2-3 steps.
-// A single big event (a mouse notch) is one step; streams of small deltas (smooth scrolling,
-// trackpads) count one step per ~90 px. Steps that arrive mid-animation are queued, not lost.
+// Wheel zoom: one step per mouse notch, whatever the mouse, driver or smoothing sends.
+// - A big pixel delta (>= 50) is a classic notch: one step, but never two steps closer than
+//   MIN_GAP ms, since some drivers send one notch as two events.
+// - Small deltas (smooth scrolling, free-spin wheels, trackpads) come as a burst. The first
+//   step fires once the burst has moved SMALL_FIRST px, then one more per SMALL_NEXT px.
+//   A burst ends after BURST_GAP ms of silence.
+// - A step that arrives while the zoom animates is queued, never dropped or doubled.
+// Open the page with #debug to see the raw wheel events and decisions.
+const WHEEL = { MIN_GAP: 45, SMALL_FIRST: 12, SMALL_NEXT: 160, BURST_GAP: 120 };
 (() => {
-  let acc = 0, last = 0, pending = null, pendPt = null;
+  let acc = 0, stepsInBurst = 0, last = 0, lastStep = -1e9, pending = null, pendPt = null;
+  const dbg = location.hash === '#debug' ? debugPanel() : null;
   const target = () => pending ?? (map._animatingZoom ? map._animateToZoom : map.getZoom());
-  function step(dir, pt){
-    const z = Math.max(map.getMinZoom(), Math.min(map.getMaxZoom(), target() + dir));
-    if (z === target()) return;
+  function step(dir, pt, why){
+    const from = target(), z = Math.max(map.getMinZoom(), Math.min(map.getMaxZoom(), from + dir));
+    lastStep = performance.now();
+    dbg && dbg(`  → ${why}: zoom ${from} → ${z}`);
+    if (z === from) return;
     if (map._animatingZoom){ pending = z; pendPt = pt; return; }
     map.setZoomAround(pt, z);
   }
@@ -191,14 +199,33 @@ const map = L.map('map', { preferCanvas: true, minZoom: 3, maxZoom: 19, scrollWh
   map.getContainer().addEventListener('wheel', e => {
     e.preventDefault();
     const now = performance.now(), pt = map.mouseEventToContainerPoint(e);
-    if (now - last > 150) acc = 0;
-    last = now;
+    const gap = now - last; last = now;
     const d = e.deltaMode === 0 ? e.deltaY : e.deltaY * 100;   // lines/pages: treat as a notch
-    if (Math.abs(d) >= 50){ acc = 0; step(d < 0 ? 1 : -1, pt); return; }
+    dbg && dbg(`+${gap > 9999 ? '∞' : Math.round(gap)}ms dY=${+e.deltaY.toFixed(2)} mode=${e.deltaMode}${e.ctrlKey ? ' ctrl' : ''}`);
+    if (!d) return;
+    if (gap > WHEEL.BURST_GAP || Math.sign(d) !== Math.sign(acc)){ acc = 0; stepsInBurst = 0; }
+    const dir = d < 0 ? 1 : -1;
+    if (Math.abs(d) >= 50){
+      acc = 0; stepsInBurst = 0;
+      if (now - lastStep >= WHEEL.MIN_GAP) step(dir, pt, 'notch'); else dbg && dbg('  · ignored (same notch)');
+      return;
+    }
     acc += d;
-    while (Math.abs(acc) >= 90){ step(acc < 0 ? 1 : -1, pt); acc -= Math.sign(acc) * 90; }
+    const due = Math.abs(acc) < WHEEL.SMALL_FIRST ? 0 : 1 + Math.floor((Math.abs(acc) - WHEEL.SMALL_FIRST) / WHEEL.SMALL_NEXT);
+    while (stepsInBurst < due){ stepsInBurst++; step(dir, pt, 'smooth'); }
   }, { passive: false });
+  window.__vk = { map, WHEEL };
 })();
+function debugPanel(){
+  const el = document.createElement('pre');
+  el.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:3000;max-height:45vh;width:min(420px,90vw);overflow:auto;margin:0;padding:8px;font:11px/1.35 ui-monospace,monospace;background:rgba(0,0,0,.82);color:#e6e6e6;border-radius:6px;white-space:pre-wrap';
+  const btn = document.createElement('button');
+  btn.textContent = 'Kopiér log'; btn.style.cssText = 'position:fixed;left:8px;bottom:calc(45vh + 16px);z-index:3001;font:12px sans-serif;padding:4px 8px';
+  btn.onclick = () => navigator.clipboard.writeText(lines.join('\n')).then(() => btn.textContent = 'Kopieret', () => {});
+  document.body.append(el, btn);
+  const lines = window.__vkLog = [];
+  return msg => { lines.push(msg); if (lines.length > 400) lines.shift(); el.textContent = lines.slice(-60).join('\n'); el.scrollTop = el.scrollHeight; };
+}
 const renderer = L.canvas({ tolerance: 6, padding: 0.3 });
 map.fitBounds(DK);
 map.attributionControl.setPrefix(false);

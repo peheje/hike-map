@@ -39,5 +39,6 @@ Open http://localhost:8765 (use `localhost`, not `127.0.0.1`, so it matches the 
 ## Other tools
 
 - `tools/propose_names.py` suggests descriptive file names for GPX files.
+- `tools/wheeltest.mjs` tests mouse-wheel zoom against a local server. Open the page with `#debug` to log raw wheel events.
 - `.claude/skills/sync-gpx` copies the GPX files from Drive into `gpx/` via Claude Code,
   for working on the files locally. The map itself does not need it.
