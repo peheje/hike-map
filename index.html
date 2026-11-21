@@ -78,7 +78,14 @@ h2{font:600 13px/1 var(--body);letter-spacing:.09em;text-transform:uppercase;col
 .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:14px}
 .kv dt{color:var(--muted)} .kv dd{margin:0;font-weight:600}
 .olist{display:grid;gap:2px;margin:0;padding:0;list-style:none;font-size:14px}
-.olist button{border:0;padding:5px 0;width:100%;justify-content:space-between;font-weight:500;border-radius:0;border-bottom:1px dotted var(--rule)}
+.olist button{border:0;padding:5px 0;width:100%;justify-content:space-between;font-weight:500;border-radius:0;border-bottom:1px dotted var(--rule);text-align:left}
+.olist .rmeta{font-size:12px;color:var(--muted);white-space:nowrap;margin-left:8px}
+.olist .rnew{color:var(--new);font-weight:600}
+#routeStatus{margin-top:6px;display:flex;align-items:center;gap:7px}
+#routeStatus:empty{display:none}
+.spin{width:13px;height:13px;flex:none;border-radius:50%;border:2px solid var(--rule);border-top-color:var(--sel);animation:vk-spin .7s linear infinite}
+@keyframes vk-spin{to{transform:rotate(360deg)}}
+#routeList{margin-top:4px}
 .card .actions button{font-size:13px;padding:8px 10px}
 
 /* hike log */
@@ -153,6 +160,13 @@ h2{font:600 13px/1 var(--body);letter-spacing:.09em;text-transform:uppercase;col
     </header>
     <div class="scroll" id="scroll">
       <div id="compare"></div>
+      <h2>Find nye ruter</h2>
+      <div class="chips">
+        <button class="chip" id="toggleRoutes" type="button" aria-pressed="false" title="Vis markerede vandreruter på kortet og hent detaljer + % nyt">Vis vandreruter</button>
+        <button class="chip" id="refreshRoutes" type="button" hidden title="Hent rutedetaljer og % nyt for det aktuelle kortudsnit">Opdater detaljer her</button>
+      </div>
+      <div class="status" id="routeStatus" role="status" aria-live="polite"></div>
+      <ul class="olist" id="routeList"></ul>
       <h2>År</h2>
       <div class="chips" id="years"></div>
       <div id="list"><p class="empty">Dine ture dukker op her, så snart de er hentet fra Drive. Du kan også trække en GPX-fil ind på kortet for at se den med det samme.</p></div>
@@ -178,7 +192,7 @@ const nf1 = new Intl.NumberFormat('da-DK', {maximumFractionDigits: 1, minimumFra
 const nf0 = new Intl.NumberFormat('da-DK', {maximumFractionDigits: 0});
 const MONTHS = ['jan','feb','mar','apr','maj','jun','jul','aug','sep','okt','nov','dec'];
 
-const S = { tracks: [], byId: new Map(), selected: null, cand: null, hiddenYears: new Set(), grid: new Map(), lines: new Map(), token: null, files: new Map() };
+const S = { tracks: [], byId: new Map(), selected: null, cand: null, hiddenYears: new Set(), grid: new Map(), lines: new Map(), token: null, files: new Map(), routes: [], wmtOn: false };
 
 /* ---------- theme tokens for canvas ---------- */
 const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -244,7 +258,9 @@ const renderer = L.canvas({ tolerance: 6, padding: 0.3 });
 map.fitBounds(DK);
 map.attributionControl.setPrefix(false);
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-bidragydere' }).addTo(map);
+const wmtLayer = L.tileLayer('https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png', { maxZoom: 18, opacity: 0.8, attribution: 'Ruter © <a href="https://hiking.waymarkedtrails.org" target="_blank" rel="noopener">Waymarked Trails</a>' });
 const trailsLayer = L.layerGroup().addTo(map);
+const routesLayer = L.layerGroup().addTo(map);
 const candLayer = L.layerGroup().addTo(map);
 
 function zoomClass(){
@@ -451,21 +467,35 @@ function select(id, fly){
 /* ---------- comparison ---------- */
 function compare(c, skipId){
   const skip = skipId != null ? S.tracks.findIndex(t => t.id === skipId) : -1;
-  const flags = c.pts.map(p => near(S.grid, p, skip));
+  const segs = c.segs || [c.pts];
   const runs = []; let known = 0, total = 0; const share = new Map();
-  for (let i=1;i<c.pts.length;i++){
-    const d = hav(c.pts[i-1], c.pts[i]); total += d;
-    const k = !!(flags[i] && flags[i-1]);
-    if (k){ known += d; for (const j of flags[i]) if (flags[i-1].has(j)) share.set(j, (share.get(j)||0) + d); }
-    const last = runs[runs.length-1];
-    if (last && last.known === k) last.pts.push(c.pts[i]); else runs.push({ known: k, pts: [c.pts[i-1], c.pts[i]] });
+  for (const pts of segs){
+    const flags = pts.map(p => near(S.grid, p, skip));
+    for (let i=1;i<pts.length;i++){
+      const d = hav(pts[i-1], pts[i]); total += d;
+      const k = !!(flags[i] && flags[i-1]);
+      if (k){ known += d; for (const j of flags[i]) if (flags[i-1].has(j)) share.set(j, (share.get(j)||0) + d); }
+      const last = runs[runs.length-1];
+      if (last && last.known === k && last.seg === pts) last.pts.push(pts[i]);
+      else runs.push({ known: k, pts: [pts[i-1], pts[i]], seg: pts });
+    }
   }
   const overlaps = [...share].map(([j, m]) => ({ t: S.tracks[j], km: m/1000 })).filter(o => o.km >= 0.1).sort((a,b) => b.km - a.km);
   return { ...c, runs, knownKm: known/1000, totalKm: total/1000, overlaps, skipId };
 }
+function exportGpx(c){
+  const segs = c.segs || [c.pts];
+  const body = segs.map(pts => `  <trkseg>\n${pts.map(p => `    <trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"/>`).join('\n')}\n  </trkseg>`).join('\n');
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Vandrekort" xmlns="http://www.topografix.com/GPX/1/1">\n<trk>\n  <name>${esc(c.name)}</name>\n${body}\n</trk>\n</gpx>\n`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([xml], { type: 'application/gpx+xml' }));
+  a.download = (c.name || 'rute').toLowerCase().replace(/[^a-z0-9æøå]+/gi, '-').replace(/^-|-$/g, '') + '.gpx';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 function setCandidate(c, skipId){
   S.cand = compare(c, skipId);
-  redrawTrails(); renderCompare();
+  redrawTrails(); drawRoutes(); renderCompare();
   map.flyToBounds(c.bbox, { padding: [40,40], maxZoom: 15, duration: 0.6 });
   $('scroll').scrollTop = 0;
 }
@@ -475,13 +505,15 @@ function renderCompare(){
   if (c){
     const pct = c.totalKm ? Math.round(100 * c.knownKm / c.totalKm) : 0;
     h += `<section class="card" aria-label="Sammenligning">
-      <div class="meta">${c.skipId ? 'Sammenlignet med dine andre ture' : 'Ny rute · ' + esc(c.title)}</div>
+      <div class="meta">${c.skipId ? 'Sammenlignet med dine andre ture' : c.osmUrl ? 'Fundet rute · ' + esc(c.title) : 'Ny rute · ' + esc(c.title)}</div>
       <h3>${esc(c.name)}</h3>
       <div class="split" title="${pct}% kendt"><i style="width:${pct}%"></i></div>
       <div class="legend"><span style="--c:var(--known)">Gået før · ${nf1.format(c.knownKm)} km (${pct}%)</span><span style="--c:var(--new)">Nyt · ${nf1.format(c.totalKm - c.knownKm)} km</span></div>
       ${c.overlaps.length ? `<div class="meta">Overlapper med ${c.overlaps.length} ${c.overlaps.length === 1 ? 'tur' : 'ture'}</div><ul class="olist">${c.overlaps.slice(0,8).map(o => `<li><button type="button" data-id="${o.t.id}"><span>${fmtDate(o.t.date)} · ${esc(o.t.name)}</span><span>${nf1.format(o.km)} km</span></button></li>`).join('')}</ul>` : `<div class="meta">Ingen af dine tidligere ture rører denne rute.</div>`}
       <div class="actions">
         ${!c.skipId && c.b64 ? `<button class="primary" type="button" id="save" ${S.token ? '' : 'disabled'}>Gem i Drive</button>` : ''}
+        ${!c.skipId && !c.b64 ? `<button class="primary" type="button" id="dlGpx">Download GPX</button>` : ''}
+        ${c.osmUrl ? `<a class="btn" href="${esc(c.osmUrl)}" target="_blank" rel="noopener">OpenStreetMap</a>` : ''}
         <button type="button" id="clear">Luk sammenligning</button>
       </div>
       <div class="status" id="saveStatus"></div>
@@ -502,9 +534,10 @@ function renderCompare(){
 }
 $('compare').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  if (b.id === 'clear'){ S.cand = null; redrawTrails(); renderCompare(); }
+  if (b.id === 'clear'){ S.cand = null; redrawTrails(); drawRoutes(); renderCompare(); }
   else if (b.id === 'cmpSel'){ const t = S.byId.get(S.selected); if (t) setCandidate({ name: t.name, title: t.title, pts: t.pts, bbox: t.bbox }, t.id); }
   else if (b.id === 'save') saveToDrive(b);
+  else if (b.id === 'dlGpx' && S.cand) exportGpx(S.cand);
   else if (b.dataset.id) select(b.dataset.id, false);
 });
 
@@ -526,6 +559,163 @@ addEventListener('dragenter', e => { if ([...(e.dataTransfer?.types||[])].includ
 addEventListener('dragleave', () => { if (--dragDepth <= 0){ dragDepth = 0; $('drop').hidden = true; } });
 addEventListener('dragover', e => e.preventDefault());
 addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; $('drop').hidden = true; const f = e.dataTransfer?.files?.[0]; if (f) readFile(f); });
+
+/* ---------- discover routes (Waymarked Trails + Overpass) ---------- */
+const NET_LABEL = { lwn: 'Lokal rute', rwn: 'Regional rute', nwn: 'National rute', iwn: 'International rute' };
+function setRouteStatus(msg, err, loading){
+  const el = $('routeStatus'); el.classList.toggle('err', !!err);
+  el.innerHTML = (loading ? '<span class="spin" aria-hidden="true"></span>' : '') + esc(msg);
+}
+function stitchRelation(members){
+  const segs = [];
+  for (const m of members || []){
+    if (m.type !== 'way' || !m.geometry || m.geometry.length < 2) continue;
+    segs.push(m.geometry.map(g => [+g.lat.toFixed(5), +g.lon.toFixed(5)]));
+  }
+  if (!segs.length) return [];
+  const same = (a, b) => Math.abs(a[0] - b[0]) < 1e-5 && Math.abs(a[1] - b[1]) < 1e-5;
+  const chains = [], used = new Uint8Array(segs.length);
+  for (let i = 0; i < segs.length; i++){
+    if (used[i]) continue;
+    used[i] = 1;
+    let chain = segs[i].slice(), grew = true;
+    while (grew){
+      grew = false;
+      for (let j = 0; j < segs.length; j++){
+        if (used[j]) continue;
+        const s = segs[j], head = chain[0], tail = chain[chain.length - 1];
+        if (same(tail, s[0])){ chain.push(...s.slice(1)); used[j] = 1; grew = true; }
+        else if (same(tail, s[s.length - 1])){ chain.push(...s.slice(0, -1).reverse()); used[j] = 1; grew = true; }
+        else if (same(head, s[s.length - 1])){ chain.unshift(...s.slice(0, -1)); used[j] = 1; grew = true; }
+        else if (same(head, s[0])){ chain.unshift(...s.slice(1).reverse()); used[j] = 1; grew = true; }
+      }
+    }
+    chains.push(chain);
+  }
+  return chains;
+}
+function drawRoutes(){
+  routesLayer.clearLayers();
+  for (const r of S.routes){
+    if (S.cand && S.cand.osmUrl === r.osmUrl) continue;
+    const pctNew = r.totalKm ? Math.round(100 * (r.totalKm - r.knownKm) / r.totalKm) : 0;
+    const op = S.cand ? 0.25 : 0.85;
+    for (const seg of r.segs){
+      const pl = L.polyline(seg, { renderer, color: '#0ca678', weight: 3, opacity: op, dashArray: '6 5', lineJoin: 'round' });
+      pl.bindTooltip(`${r.name} · ${nf1.format(r.totalKm)} km · ${pctNew}% nyt`, { sticky: true, direction: 'top', offset: [0, -6] });
+      pl.on('click', () => setCandidate(r, null));
+      pl.on('mouseover', () => pl.setStyle({ weight: 5, opacity: 1 }));
+      pl.on('mouseout', () => pl.setStyle({ weight: 3, opacity: op }));
+      pl.addTo(routesLayer);
+    }
+  }
+}
+function renderRoutes(){
+  const el = $('routeList');
+  if (!S.routes.length){ el.innerHTML = ''; return; }
+  el.innerHTML = S.routes.map((r, i) => {
+    const pctNew = r.totalKm ? Math.round(100 * (r.totalKm - r.knownKm) / r.totalKm) : 0;
+    return `<li><button type="button" data-ri="${i}"><span>${esc(r.name)}</span><span class="rmeta">${nf1.format(r.totalKm)} km · <span class="rnew">${pctNew}% nyt</span></span></button></li>`;
+  }).join('');
+}
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+];
+async function queryOverpass(query, signal){
+  const body = 'data=' + encodeURIComponent(query);
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' };
+  let lastErr = null;
+  for (const url of OVERPASS_ENDPOINTS){
+    for (let attempt = 0; attempt < 2; attempt++){
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort('timeout'), 18000);
+      const onAbort = () => ctrl.abort(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+      try {
+        const res = await fetch(url, { method: 'POST', headers, body, signal: ctrl.signal });
+        if (res.ok) return await res.json();
+        lastErr = new Error(`HTTP ${res.status}`);
+        if (![429, 502, 503, 504].includes(res.status)) break;
+      } catch (e) {
+        if (signal.aborted) throw e;
+        lastErr = e.name === 'AbortError' ? new Error('Timeout') : e;
+      } finally {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+      }
+      if (attempt === 0) await new Promise(r => setTimeout(r, 600));
+    }
+  }
+  throw lastErr || new Error('Ukendt fejl');
+}
+let routeCtrl = null;
+async function fetchRoutesHere(){
+  if (!S.wmtOn) return;
+  if (map.getZoom() < 10){
+    setRouteStatus('Viser vandreruter på kortet. Zoom længere ind (zoom ≥ 10) og tryk “Opdater detaljer her” for at hente % nyt.');
+    return;
+  }
+  if (routeCtrl) routeCtrl.abort();
+  const ctrl = routeCtrl = new AbortController();
+  $('refreshRoutes').disabled = true;
+  setRouteStatus('Viser kortlag · henter rutedetaljer og % nyt…', false, true);
+  try {
+    const b = map.getBounds();
+    const bbox = `${b.getSouth().toFixed(4)},${b.getWest().toFixed(4)},${b.getNorth().toFixed(4)},${b.getEast().toFixed(4)}`;
+    const q = `[out:json][timeout:16];relation["type"="route"]["route"~"^(hiking|foot)$"](${bbox});out geom;`;
+    const data = await queryOverpass(q, ctrl.signal);
+    if (ctrl.signal.aborted || !S.wmtOn) return;
+    const found = [];
+    for (const rel of data.elements || []){
+      if (rel.type !== 'relation') continue;
+      const segs = stitchRelation(rel.members);
+      if (!segs.length) continue;
+      let s = 90, w = 180, nn = -90, e = -180;
+      for (const seg of segs) for (const p of seg){ s = Math.min(s, p[0]); nn = Math.max(nn, p[0]); w = Math.min(w, p[1]); e = Math.max(e, p[1]); }
+      const tags = rel.tags || {};
+      const name = tags.name || (tags.ref ? `Rute ${tags.ref}` : 'Unavngivet vandrerute');
+      const title = [NET_LABEL[tags.network] || 'OSM-vandrerute', tags.ref ? `nr. ${tags.ref}` : ''].filter(Boolean).join(' · ');
+      const base = { name, title, pts: segs[0], segs, bbox: [[s, w], [nn, e]], osmUrl: `https://www.openstreetmap.org/relation/${rel.id}` };
+      found.push(compare(base, null));
+    }
+    found.sort((a, b) => {
+      const pa = a.totalKm ? (a.totalKm - a.knownKm) / a.totalKm : 0;
+      const pb = b.totalKm ? (b.totalKm - b.knownKm) / b.totalKm : 0;
+      return pb - pa || a.totalKm - b.totalKm;
+    });
+    S.routes = found;
+    drawRoutes(); renderRoutes();
+    setRouteStatus(found.length ? `Fandt ${found.length} ${found.length === 1 ? 'rute' : 'ruter'} i området (sorteret efter mest nyt terræn).` : 'Ingen markerede vandreruter fundet i dette udsnit.');
+  } catch (e) {
+    if (e.name === 'AbortError' || !S.wmtOn) return;
+    setRouteStatus(`Kunne ikke hente rutedetaljer fra OpenStreetMap (${e.message}), men kortlaget vises stadig. Prøv “Opdater detaljer her” om lidt.`, true);
+  } finally {
+    if (routeCtrl === ctrl){ routeCtrl = null; $('refreshRoutes').disabled = false; }
+  }
+}
+$('toggleRoutes').addEventListener('click', () => {
+  S.wmtOn = !S.wmtOn;
+  $('toggleRoutes').setAttribute('aria-pressed', String(S.wmtOn));
+  $('refreshRoutes').hidden = !S.wmtOn;
+  if (S.wmtOn){
+    wmtLayer.addTo(map);
+    fetchRoutesHere();
+  } else {
+    if (routeCtrl){ routeCtrl.abort(); routeCtrl = null; }
+    map.removeLayer(wmtLayer);
+    S.routes = [];
+    drawRoutes(); renderRoutes();
+    setRouteStatus('');
+  }
+});
+$('refreshRoutes').addEventListener('click', fetchRoutesHere);
+$('routeList').addEventListener('click', e => {
+  const b = e.target.closest('button[data-ri]'); if (!b) return;
+  const r = S.routes[+b.dataset.ri]; if (r) setCandidate(r, null);
+});
 
 /* ---------- Google Drive ---------- */
 function setStatus(msg, err, prog){
@@ -624,6 +814,7 @@ async function sync(){
 function refresh(fit){
   rebuild(); renderStats(); renderYears(); renderList();
   if (S.cand) S.cand = compare(S.cand, S.cand.skipId);
+  if (S.routes.length){ S.routes = S.routes.map(r => compare(r, null)); drawRoutes(); renderRoutes(); }
   redrawTrails(); renderCompare();
   if (fit && !S.selected && !S.cand && !refresh.fitted){
     const dk = S.tracks.filter(t => t.bbox[0][0] > 54.4 && t.bbox[1][0] < 57.9 && t.bbox[0][1] > 7.8 && t.bbox[1][1] < 15.3);
