@@ -52,6 +52,8 @@ h1 small{display:block;font:500 12px/1.2 var(--body);letter-spacing:.08em;text-t
 .stat b{display:block;font:600 24px/1 var(--display)}
 .stat span{font-size:12px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
 .actions{display:flex;gap:8px;flex-wrap:wrap}
+header .actions{flex-wrap:nowrap;gap:6px}
+header .actions button{flex:1 1 auto;justify-content:center;white-space:nowrap;padding:8px 10px;font-size:13px;min-width:0}
 button,.btn{font:600 14px/1 var(--body);border-radius:6px;border:1px solid var(--ink);background:transparent;color:var(--ink);padding:9px 12px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
 button.primary{background:var(--btn);color:var(--btn-fg);border-color:var(--btn)}
 button:disabled{opacity:.45;cursor:default}
@@ -106,14 +108,22 @@ h2{font:600 13px/1 var(--body);letter-spacing:.09em;text-transform:uppercase;col
 .mapwrap #map{position:absolute;inset:0}
 .drop[hidden]{display:none}
 .drop{position:fixed;inset:0;z-index:2000;background:color-mix(in srgb,var(--new) 18%,transparent);border:3px dashed var(--new);display:grid;place-items:center;font:700 28px var(--display);color:var(--ink);pointer-events:none}
+.grab{display:none}
 
 @media (max-width:760px){
   .app{grid-template-columns:minmax(0,1fr);grid-template-rows:1fr auto}
   .mapwrap{order:1}
-  .panel{order:2;border-right:0;border-top:1px solid var(--rule);height:44dvh;transition:height .25s ease}
+  .grab{display:flex;justify-content:center;align-items:center;padding:8px 0 2px;cursor:grab;touch-action:none;flex:none}
+  .grab::before{content:"";width:38px;height:4px;border-radius:999px;background:var(--rule)}
+  .panel{order:2;border-right:0;border-top:1px solid var(--rule);height:44dvh;transition:height .25s ease;overflow:hidden}
   .panel.expanded{height:78dvh}
-  header{padding:12px 16px 10px;transition:padding .2s ease,gap .2s ease}
-  .panel.expanded header{padding:8px 16px 6px;gap:6px}
+  .panel.collapsed{height:calc(48px + env(safe-area-inset-bottom,0px))}
+  .panel.collapsed header{padding:2px 16px 8px;border-bottom:0;cursor:pointer}
+  .panel.collapsed h1{font-size:20px}
+  .panel.collapsed h1 small,.panel.collapsed .stats,.panel.collapsed .actions,.panel.collapsed .status,.panel.collapsed .scroll{display:none}
+  header{padding:4px 16px 8px;gap:8px;touch-action:none;transition:padding .2s ease,gap .2s ease}
+  header .actions button{padding:8px 8px}
+  .panel.expanded header{padding:4px 16px 6px;gap:6px}
   .panel.expanded h1 small{display:none}
   h1{font-size:24px}
   .scroll{padding:0 16px 20px}
@@ -125,6 +135,7 @@ h2{font:600 13px/1 var(--body);letter-spacing:.09em;text-transform:uppercase;col
 <div class="app">
   <div class="mapwrap"><div id="map" role="application" aria-label="Kort over vandreture"></div><div class="scale" id="scale"></div></div>
   <aside class="panel">
+    <div class="grab" id="grab" role="button" tabindex="0" aria-label="Skub eller udvid panelet" aria-expanded="true"></div>
     <header>
       <h1>Vandrekort<small>Ture fra mappen “Vandreture gpx”</small></h1>
       <div class="stats" id="stats">
@@ -133,9 +144,9 @@ h2{font:600 13px/1 var(--body);letter-spacing:.09em;text-transform:uppercase;col
         <div class="stat"><b id="sU">–</b><span>km unikke</span></div>
       </div>
       <div class="actions">
-        <button class="primary" id="pick" type="button">Tjek ny GPX</button>
-        <button id="reload" type="button">Genindlæs fra Drive</button>
-        <button id="login" type="button">Log ind med Google</button>
+        <button class="primary" id="pick" type="button" title="Tjek ny GPX">Tjek GPX</button>
+        <button id="reload" type="button" title="Genindlæs fra Drive">Genindlæs</button>
+        <button id="login" type="button" title="Log ind med Google">Log ind</button>
         <input type="file" id="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden>
       </div>
       <div class="status" id="status" role="status" aria-live="polite">Indlæser…</div>
@@ -428,9 +439,13 @@ function renderSwatches(){
 function select(id, fly){
   S.selected = S.selected === id && !fly ? null : id;
   const t = S.byId.get(S.selected);
-  if (t && fly){ setPanelExpanded(false); map.flyToBounds(t.bbox, { padding: [40,40], maxZoom: 15, duration: 0.6 }); }
+  if (t && fly){
+    lockExpandUntil = Date.now() + 450;
+    setPanelExpanded(false);
+    map.flyToBounds(t.bbox, { padding: [40,40], maxZoom: 15, duration: 0.6 });
+  }
   redrawTrails(); renderList(); renderCompare();
-  if (t && !fly){ const row = document.querySelector(`.row[data-id="${CSS.escape(id)}"]`); row && row.scrollIntoView({ block: 'nearest' }); }
+  if (t) centerRow(S.selected);
 }
 
 /* ---------- comparison ---------- */
@@ -521,7 +536,7 @@ function setStatus(msg, err, prog){
 function loadToken(){ try { const t = JSON.parse(sessionStorage.getItem('vk-token') || 'null'); if (t && t.exp > Date.now() + 60000) return t; } catch {} return null; }
 function storeToken(t){ S.token = t; try { t ? sessionStorage.setItem('vk-token', JSON.stringify(t)) : sessionStorage.removeItem('vk-token'); } catch {} renderLogin(); }
 function hasScope(sc){ return !!(S.token && S.token.scope.split(' ').includes(sc)); }
-function renderLogin(){ $('login').textContent = S.token ? 'Log ud' : 'Log ind med Google'; $('reload').disabled = !S.token || syncing; }
+function renderLogin(){ $('login').textContent = S.token ? 'Log ud' : 'Log ind'; $('login').title = S.token ? 'Log ud' : 'Log ind med Google'; $('reload').disabled = !S.token || syncing; }
 class DriveError extends Error { constructor(code, status, msg){ super(msg || code); this.code = code; this.status = status; } }
 let tokenClient = null;
 function requestToken(scope){
@@ -648,21 +663,85 @@ function retheme(){ readTokens(); redrawTrails(); }
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', retheme);
 new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
-/* ---------- mobile panel expand on scroll ---------- */
+/* ---------- mobile panel states (collapsed / normal / expanded) ---------- */
 const panelEl = document.querySelector('.panel');
-let panelExp = false;
-function setPanelExpanded(exp){
-  if (panelExp === exp) return;
-  panelExp = exp;
-  panelEl.classList.toggle('expanded', exp);
+const grabEl = $('grab');
+let panelState = 'normal';
+let lockExpandUntil = 0;
+function setPanelState(next){
+  if (panelState === next) return;
+  panelState = next;
+  panelEl.classList.toggle('expanded', next === 'expanded');
+  panelEl.classList.toggle('collapsed', next === 'collapsed');
+  if (grabEl) grabEl.setAttribute('aria-expanded', String(next !== 'collapsed'));
+}
+function setPanelExpanded(exp){ setPanelState(exp ? 'expanded' : 'normal'); }
+function centerRow(id){
+  const row = document.querySelector(`.row[data-id="${CSS.escape(id)}"]`);
+  if (!row) return;
+  lockExpandUntil = Math.max(lockExpandUntil, Date.now() + 250);
+  row.scrollIntoView({ block: 'center' });
 }
 $('scroll').addEventListener('scroll', () => {
+  if (Date.now() < lockExpandUntil) return;
   const st = $('scroll').scrollTop;
-  if (!panelExp && st > 12) setPanelExpanded(true);
-  else if (panelExp && st <= 2) setPanelExpanded(false);
+  if (panelState === 'normal' && st > 12) setPanelState('expanded');
+  else if (panelState === 'expanded' && st <= 2) setPanelState('normal');
 }, { passive: true });
-panelEl.addEventListener('transitionend', e => { if (e.propertyName === 'height') map.invalidateSize(); });
-map.getContainer().addEventListener('pointerdown', () => setPanelExpanded(false), { passive: true });
+panelEl.addEventListener('transitionend', e => {
+  if (e.propertyName !== 'height') return;
+  map.invalidateSize();
+  if (panelState === 'normal' && S.selected) centerRow(S.selected);
+});
+map.getContainer().addEventListener('pointerdown', () => {
+  if (panelState === 'expanded') setPanelState('normal');
+}, { passive: true });
+
+let dragY = null, dragSource = null;
+function startDrag(src, y){ dragY = y; dragSource = src; }
+function endDrag(y){
+  if (dragY == null) return false;
+  const dy = y - dragY;
+  dragY = null;
+  if (Math.abs(dy) < 28) return false;
+  if (dy > 0){
+    if (panelState === 'expanded') setPanelState('normal');
+    else if (panelState === 'normal') setPanelState('collapsed');
+  } else {
+    if (panelState === 'collapsed') setPanelState('normal');
+    else if (panelState === 'normal') setPanelState('expanded');
+  }
+  return true;
+}
+[grabEl, document.querySelector('header')].forEach(el => {
+  if (!el) return;
+  el.addEventListener('pointerdown', e => {
+    if (e.target.closest('button,a,input')) return;
+    startDrag(el, e.clientY);
+  }, { passive: true });
+  el.addEventListener('pointerup', e => {
+    if (!endDrag(e.clientY) && (el === grabEl || panelState === 'collapsed') && !e.target.closest('button,a,input')){
+      setPanelState(panelState === 'normal' ? 'collapsed' : 'normal');
+    }
+  }, { passive: true });
+  el.addEventListener('pointercancel', () => { dragY = null; }, { passive: true });
+});
+if (grabEl) grabEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); setPanelState(panelState === 'normal' ? 'collapsed' : 'normal'); }
+});
+$('scroll').addEventListener('touchstart', e => {
+  if (e.touches.length === 1 && $('scroll').scrollTop <= 2) startDrag($('scroll'), e.touches[0].clientY);
+}, { passive: true });
+$('scroll').addEventListener('touchend', e => {
+  if (dragSource === $('scroll') && e.changedTouches.length && $('scroll').scrollTop <= 2){
+    const dy = e.changedTouches[0].clientY - dragY;
+    dragY = null;
+    if (dy > 36){
+      if (panelState === 'expanded') setPanelState('normal');
+      else if (panelState === 'normal') setPanelState('collapsed');
+    }
+  } else if (dragSource === $('scroll')) dragY = null;
+}, { passive: true });
 
 /* ---------- boot ---------- */
 (async () => {
